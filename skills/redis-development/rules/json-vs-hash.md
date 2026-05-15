@@ -16,7 +16,7 @@ Redis offers three ways to store structured data: JSON, Hash, and serialized str
 | **Structure** | Nested objects and arrays | Flat key-value pairs | Any structure |
 | **Atomic partial reads** | Yes (`$.field`) | Yes (`HGET`) | No (must fetch entire value) |
 | **Atomic partial writes** | Yes (`JSON.SET $.field`) | Yes (`HSET`) | No (must rewrite entire value) |
-| **RQE indexing** | Yes | Yes | No |
+| **Search indexing** | Yes | Yes | No |
 | **Geospatial indexing** | Yes | Yes | No |
 | **Memory efficiency** | Higher overhead | More efficient | Most compact |
 | **Field-level expiration** | No | Yes (HEXPIRE) | No |

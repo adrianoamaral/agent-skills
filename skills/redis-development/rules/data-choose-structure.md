@@ -18,7 +18,7 @@ Selecting the appropriate Redis data type for your use case is fundamental to pe
 | Queue, recent items | List | O(1) push/pop at ends |
 | Unique items, membership | Set | O(1) add/remove/check |
 | Rankings, ranges | Sorted Set | Score-based ordering |
-| Nested/hierarchical data | JSON | Path queries, nested structures, geospatial indexing with RQE |
+| Nested/hierarchical data | JSON | Path queries, nested structures, geospatial indexing with Redis Search |
 | Event logs, messaging | Stream | Persistent, consumer groups |
 | Similarity search | Vector Set | Native vector storage with built-in HNSW indexing |
 

@@ -3,7 +3,7 @@
  * Validate rule files follow the correct structure
  */
 
-import { readdir } from 'fs/promises'
+import { readdir, readFile } from 'fs/promises'
 import { join } from 'path'
 import { Rule } from './types.js'
 import { parseRuleFile } from './parser.js'
@@ -88,6 +88,68 @@ function validateRule(rule: Rule, file: string): ValidationError[] {
 }
 
 /**
+ * Spec 0001 §7.8d: every `search-` / `vector-` prefixed rule that ships client mirrors
+ * (redis-py and/or Jedis snippets) must contain the conditional-loading
+ * directive block. We detect a client mirror by the presence of a fenced
+ * code block whose language label is "python" or "java" (Jedis snippets are
+ * commonly labeled "java"), or by a textual marker like "redis-py" / "Jedis"
+ * appearing in the body. We then require the directive block to be present.
+ *
+ * The matcher is intentionally lightweight: it looks for the canonical phrase
+ * "Client mirrors — read exactly one:" (the em-dash and the colon are part of
+ * the canonical form, but we accept either em-dash or ASCII hyphen with a
+ * space, and we accept either curly or straight quotes around the trailing
+ * text). Authors who follow the template in CLAUDE.md / AGENTS.md will pass.
+ */
+function validateSearchVectorDirective(file: string, raw: string): ValidationError[] {
+  const errors: ValidationError[] = []
+  if (!/^(search|vector)-/.test(file)) return errors
+
+  const hasPythonFence = /```python\b/.test(raw) || /```py\b/.test(raw)
+  const hasJavaFence = /```java\b/.test(raw)
+  const mentionsRedisPy = /\bredis-py\b/i.test(raw)
+  const mentionsJedis = /\bJedis\b/.test(raw)
+
+  const hasClientMirror = hasPythonFence || hasJavaFence || mentionsRedisPy || mentionsJedis
+  if (!hasClientMirror) return errors
+
+  // Accept em-dash or ASCII " - " as the separator. The phrase must be in bold.
+  const directiveRegex = /\*\*Client mirrors\s*[—-]\s*read exactly one:\*\*/i
+  if (!directiveRegex.test(raw)) {
+    errors.push({
+      file,
+      message:
+        'Missing client-mirrors directive block. ' +
+        'Search/vector rules with client snippets must include the literal phrase ' +
+        '"**Client mirrors — read exactly one:**" followed by the three-bullet ' +
+        'list pointing to python-redis-py.md, java-jedis.md, python-redisvl.md ' +
+        '(see spec 0001 §7.8b).',
+    })
+    return errors
+  }
+
+  // Light sanity check: the directive block should reference all three client
+  // reference files. We don't enforce exact wording, just that each path
+  // appears somewhere in the file.
+  const hasPyRef = /references\/clients\/python-redis-py\.md/.test(raw)
+  const hasJedisRef = /references\/clients\/java-jedis\.md/.test(raw)
+  const hasRvlRef = /references\/clients\/python-redisvl\.md/.test(raw)
+  const missing: string[] = []
+  if (!hasPyRef) missing.push('python-redis-py.md')
+  if (!hasJedisRef) missing.push('java-jedis.md')
+  if (!hasRvlRef) missing.push('python-redisvl.md')
+  if (missing.length > 0) {
+    errors.push({
+      file,
+      message:
+        `Client-mirrors directive present but missing reference path(s): ${missing.join(', ')}. ` +
+        'All three client references must be listed (see spec 0001 §7.8b).',
+    })
+  }
+  return errors
+}
+
+/**
  * Main validation function
  */
 async function validate() {
@@ -118,6 +180,10 @@ async function validate() {
         const { rule } = await parseRuleFile(filePath)
         const errors = validateRule(rule, file)
         allErrors.push(...errors)
+
+        // Spec 0001 §7.8d directive-block check
+        const raw = await readFile(filePath, 'utf-8')
+        allErrors.push(...validateSearchVectorDirective(file, raw))
       } catch (error) {
         allErrors.push({
           file,

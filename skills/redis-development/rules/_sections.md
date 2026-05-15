@@ -18,9 +18,9 @@ This file defines the rule categories for Redis best practices. Rules are automa
 
 ## 4. JSON Documents (json)
 **Impact:** MEDIUM
-**Description:** Using Redis JSON for nested structures, partial updates, and integration with RQE.
+**Description:** Using Redis JSON for nested structures, partial updates, and integration with Redis Search.
 
-## 5. Redis Query Engine (rqe)
+## 5. Redis Search (search)
 **Impact:** HIGH
 **Description:** FT.CREATE, FT.SEARCH, FT.AGGREGATE, index design, field types, and query optimization.
 

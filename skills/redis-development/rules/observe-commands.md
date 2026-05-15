@@ -35,7 +35,7 @@ MEMORY USAGE mykey
 CLIENT LIST
 CLIENT INFO
 
-# Index info (RQE)
+# Index info (Search)
 FT.INFO idx:products
 FT.PROFILE idx:products SEARCH QUERY "@name:laptop"
 ```

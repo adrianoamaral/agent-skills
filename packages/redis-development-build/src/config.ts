@@ -37,7 +37,7 @@ export const SKILLS: Record<string, SkillConfig> = {
       ram: 2,
       conn: 3,
       json: 4,
-      rqe: 5,
+      search: 5,
       vector: 6,
       'semantic-cache': 7,
       stream: 8,

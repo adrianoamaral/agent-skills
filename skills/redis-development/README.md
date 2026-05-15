@@ -42,7 +42,7 @@ A structured repository for creating and maintaining Redis development guideline
    - `ram-` for Memory & Expiration
    - `conn-` for Connection & Performance
    - `json-` for JSON Documents
-   - `rqe-` for Redis Query Engine
+   - `search-` for Redis Search
    - `vector-` for Vector Search & RedisVL
    - `semantic-cache-` for Semantic Caching
    - `stream-` for Streams & Pub/Sub

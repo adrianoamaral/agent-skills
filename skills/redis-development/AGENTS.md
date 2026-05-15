@@ -14,7 +14,7 @@ January 2026
 
 ## Abstract
 
-Best practices for Redis including data structures, memory management, Redis Query Engine (RQE), vector search with RedisVL, semantic caching with LangCache, and performance optimization. Optimized for AI agents and LLMs.
+Best practices for Redis including data structures, memory management, Redis Search, vector search with RedisVL, semantic caching with LangCache, and performance optimization. Optimized for AI agents and LLMs.
 
 ---
 
@@ -38,18 +38,27 @@ Best practices for Redis including data structures, memory management, Redis Que
 4. [JSON Documents](#4-json-documents) — **MEDIUM**
    - 4.1 [Choose JSON vs Hash vs String Appropriately](#41-choose-json-vs-hash-vs-string-appropriately)
    - 4.2 [Use JSON Paths for Partial Updates](#42-use-json-paths-for-partial-updates)
-5. [Redis Query Engine](#5-redis-query-engine) — **HIGH**
-   - 5.1 [Choose the Correct Field Type](#51-choose-the-correct-field-type)
-   - 5.2 [Index Only Fields You Query](#52-index-only-fields-you-query)
-   - 5.3 [Manage Indexes for Zero-Downtime Updates](#53-manage-indexes-for-zero-downtime-updates)
-   - 5.4 [Use DIALECT 2 for Query Syntax](#54-use-dialect-2-for-query-syntax)
-   - 5.5 [Use SKIPINITIALSCAN for New Data Only Indexes](#55-use-skipinitialscan-for-new-data-only-indexes)
-   - 5.6 [Write Efficient Queries](#56-write-efficient-queries)
+5. [Redis Search](#5-redis-search) — **HIGH**
+   - 5.1 [Build FT.AGGREGATE Pipelines in the Correct Stage Order](#51-build-ftaggregate-pipelines-in-the-correct-stage-order)
+   - 5.2 [Choose the Correct Field Type](#52-choose-the-correct-field-type)
+   - 5.3 [Choose the Right FT Command for the Job](#53-choose-the-right-ft-command-for-the-job)
+   - 5.4 [Control Tokenization with NOSTEM, LANGUAGE, STOPWORDS, PHONETIC](#54-control-tokenization-with-nostem-language-stopwords-phonetic)
+   - 5.5 [Debug Queries with FT.EXPLAIN, FT.PROFILE, FT.INFO](#55-debug-queries-with-ftexplain-ftprofile-ftinfo)
+   - 5.6 [Index JSON Documents with JSONPath and Aliases](#56-index-json-documents-with-jsonpath-and-aliases)
+   - 5.7 [Index Only Fields You Query](#57-index-only-fields-you-query)
+   - 5.8 [Manage Indexes for Zero-Downtime Updates](#58-manage-indexes-for-zero-downtime-updates)
+   - 5.9 [Master Redis Search Query Syntax](#59-master-redis-search-query-syntax)
+   - 5.10 [Paginate Large Aggregations with FT.CURSOR](#510-paginate-large-aggregations-with-ftcursor)
+   - 5.11 [Run KNN, Range, and Pre-Filtered Vector Queries](#511-run-knn-range-and-pre-filtered-vector-queries)
+   - 5.12 [Shape Search Results with RETURN, SORTBY, HIGHLIGHT, SUMMARIZE](#512-shape-search-results-with-return-sortby-highlight-summarize)
+   - 5.13 [Tune FT.CREATE Options for Memory and Indexing Cost](#513-tune-ftcreate-options-for-memory-and-indexing-cost)
+   - 5.14 [Use DIALECT 2 for Query Syntax](#514-use-dialect-2-for-query-syntax)
+   - 5.15 [Write Performant Queries](#515-write-performant-queries)
 6. [Vector Search & RedisVL](#6-vector-search--redisvl) — **HIGH**
    - 6.1 [Choose HNSW vs FLAT Based on Requirements](#61-choose-hnsw-vs-flat-based-on-requirements)
-   - 6.2 [Configure Vector Indexes Properly](#62-configure-vector-indexes-properly)
-   - 6.3 [Implement RAG Pattern Correctly](#63-implement-rag-pattern-correctly)
-   - 6.4 [Use Hybrid Search for Better Results](#64-use-hybrid-search-for-better-results)
+   - 6.2 [Combine Lexical and Vector Search Correctly](#62-combine-lexical-and-vector-search-correctly)
+   - 6.3 [Configure Vector Indexes Properly](#63-configure-vector-indexes-properly)
+   - 6.4 [Implement RAG Retrieval Against Redis Correctly](#64-implement-rag-retrieval-against-redis-correctly)
 7. [Semantic Caching](#7-semantic-caching) — **MEDIUM**
    - 7.1 [Configure Semantic Cache Properly](#71-configure-semantic-cache-properly)
    - 7.2 [Use LangCache for LLM Response Caching](#72-use-langcache-for-llm-response-caching)
@@ -87,7 +96,7 @@ Selecting the appropriate Redis data type for your use case is fundamental to pe
 | Queue, recent items | List | O(1) push/pop at ends |
 | Unique items, membership | Set | O(1) add/remove/check |
 | Rankings, ranges | Sorted Set | Score-based ordering |
-| Nested/hierarchical data | JSON | Path queries, nested structures, geospatial indexing with RQE |
+| Nested/hierarchical data | JSON | Path queries, nested structures, geospatial indexing with Redis Search |
 | Event logs, messaging | Stream | Persistent, consumer groups |
 | Similarity search | Vector Set | Native vector storage with built-in HNSW indexing |
 
@@ -857,7 +866,7 @@ Reference: [https://redis.io/docs/latest/develop/use/pipelining/](https://redis.
 
 **Impact: MEDIUM**
 
-Using Redis JSON for nested structures, partial updates, and integration with RQE.
+Using Redis JSON for nested structures, partial updates, and integration with Redis Search.
 
 ### 4.1 Choose JSON vs Hash vs String Appropriately
 
@@ -870,7 +879,7 @@ Redis offers three ways to store structured data: JSON, Hash, and serialized str
 | **Structure** | Nested objects and arrays | Flat key-value pairs | Any structure |
 | **Atomic partial reads** | Yes (`$.field`) | Yes (`HGET`) | No (must fetch entire value) |
 | **Atomic partial writes** | Yes (`JSON.SET $.field`) | Yes (`HSET`) | No (must rewrite entire value) |
-| **RQE indexing** | Yes | Yes | No |
+| **Search indexing** | Yes | Yes | No |
 | **Geospatial indexing** | Yes | Yes | No |
 | **Memory efficiency** | Higher overhead | More efficient | Most compact |
 | **Field-level expiration** | No | Yes (HEXPIRE) | No |
@@ -1011,13 +1020,126 @@ Reference: [https://redis.io/docs/latest/develop/data-types/json/path/](https://
 
 ---
 
-## 5. Redis Query Engine
+## 5. Redis Search
 
 **Impact: HIGH**
 
 FT.CREATE, FT.SEARCH, FT.AGGREGATE, index design, field types, and query optimization.
 
-### 5.1 Choose the Correct Field Type
+### 5.1 Build FT.AGGREGATE Pipelines in the Correct Stage Order
+
+**Impact: HIGH (Pipeline stage order determines correctness — wrong order silently returns wrong results)**
+
+`FT.AGGREGATE` runs stages in the order you write them, like a Unix pipeline. The canonical order is `LOAD → APPLY → FILTER → GROUPBY/REDUCE → APPLY → SORTBY → LIMIT`. Swapping stages doesn't error — it silently changes what your query computes. For paginating large aggregates, see `search-aggregate-cursors.md`.
+
+**Correct: Canonical pipeline against the Bicycle dataset — load needed fields, project a derived field, filter, group, sort, limit.**
+
+```python
+# Average price per brand for mountain bicycles, top 5 brands
+FT.AGGREGATE idx:bicycle "@type:{mountain}"
+    LOAD 3 @brand @price @condition
+    APPLY "@price * 0.9" AS sale_price
+    FILTER "@condition == 'new'"
+    GROUPBY 1 @brand
+        REDUCE COUNT 0 AS bike_count
+        REDUCE AVG 1 @price AS avg_price
+        REDUCE AVG 1 @sale_price AS avg_sale_price
+    SORTBY 2 @avg_price DESC
+    LIMIT 0 5
+    DIALECT 2
+```
+
+**Stages, in order:**
+
+| Stage | Purpose | Notes |
+|-------|---------|-------|
+| `LOAD n @f1 @f2 ...` | Hydrate fields from the source doc into the pipeline. | Only loaded fields are visible to later stages. `LOAD *` pulls everything (expensive). |
+| `APPLY <expr> AS alias` | Project a computed field. | Operates row-by-row before grouping. |
+| `FILTER <expr>` | Drop rows that fail a predicate. | Filters *pipeline rows*, not the underlying index. Index-level filters belong in the query string. |
+| `GROUPBY n @f1 ... REDUCE <fn> ...` | Collapse rows that share group keys. | Reducers: `COUNT`, `COUNT_DISTINCT`, `SUM`, `AVG`, `MIN`, `MAX`, `STDDEV`, `QUANTILE`, `TOLIST`, `FIRST_VALUE`, `RANDOM_SAMPLE`. |
+| `APPLY` (post-group) | Compute derived fields over reducer output. | E.g. `APPLY "@bike_count / @brand_count" AS share`. |
+| `SORTBY n @f1 ASC ...` | Order the result. | The `n` is the count of (field, direction) tokens. |
+| `LIMIT offset num` | Slice the result. | For result sets > 1000 rows, use `WITHCURSOR` (see cursors rule). |
+
+**Common reducers — quick reference:**
+
+```python
+REDUCE COUNT 0 AS n                          # count rows in group
+REDUCE COUNT_DISTINCT 1 @user_id AS uniq     # distinct values of @user_id
+REDUCE SUM 1 @price AS total
+REDUCE AVG 1 @price AS mean
+REDUCE MIN 1 @price AS lo
+REDUCE MAX 1 @price AS hi
+REDUCE QUANTILE 2 @price 0.95 AS p95
+REDUCE TOLIST 1 @model AS models             # collect into a list
+REDUCE FIRST_VALUE 1 @model BY @price DESC AS top_model
+```
+
+**Incorrect: Filtering *after* grouping when you meant to filter the source rows; mismatched `n` count on `GROUPBY`/`SORTBY`; loading every field "just in case."**
+
+```python
+# Bad: FILTER after GROUPBY filters group rows, not source rows.
+# Intent was "only new bikes," but here you keep all groups and trim brand rows by mean price.
+FT.AGGREGATE idx:bicycle "*"
+    GROUPBY 1 @brand REDUCE AVG 1 @price AS avg_price
+    FILTER "@condition == 'new'"     # @condition no longer exists post-group!
+    DIALECT 2
+
+# Bad: GROUPBY count mismatched — RESP parse error or surprising grouping
+FT.AGGREGATE idx:bicycle "*"
+    GROUPBY 2 @brand               # said 2 fields but only listed 1
+        REDUCE COUNT 0 AS n
+    DIALECT 2
+
+# Bad: LOAD * inflates the pipeline payload on every doc
+FT.AGGREGATE idx:bicycle "*" LOAD * GROUPBY 1 @brand REDUCE COUNT 0 AS n DIALECT 2
+```
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START aggregate_pipeline
+// Mirrors QueryAggExample.java
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.aggr.AggregationBuilder;
+import redis.clients.jedis.search.aggr.Reducers;
+import redis.clients.jedis.search.aggr.SortedField;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    AggregationBuilder agg = new AggregationBuilder("@type:{mountain}")
+        .load("@brand", "@price", "@condition")
+        .apply("@price * 0.9", "sale_price")
+        .filter("@condition == 'new'")
+        .groupBy("@brand",
+            Reducers.count().as("bike_count"),
+            Reducers.avg("@price").as("avg_price"))
+        .sortBy(SortedField.desc("@avg_price"))
+        .limit(0, 5)
+        .dialect(2);
+    jedis.ftAggregate("idx:bicycle", agg);
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/query_agg.py`](https://github.com/redis/redis-py/blob/master/doctests/query_agg.py)
+
+- Jedis: [`QueryAggExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/QueryAggExample.java)
+
+Reference: [https://redis.io/docs/latest/commands/ft.aggregate/](https://redis.io/docs/latest/commands/ft.aggregate/), [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/aggregations/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/aggregations/)
+
+### 5.2 Choose the Correct Field Type
 
 **Impact: HIGH (Use TAG instead of TEXT for filtering to improve query speed 10x)**
 
@@ -1032,59 +1154,39 @@ Each field type has different capabilities and performance characteristics.
 | GEOSHAPE | Area/region queries | Polygons, circles, rectangles |
 | VECTOR | Similarity search | HNSW or FLAT algorithm |
 
-**Correct: Use TAG for exact matching.**
+**Correct: Use TAG for exact matching (Bicycle dataset).**
 
 ```python
-# Good: TAG for exact category matching
-FT.CREATE idx:products ON HASH PREFIX 1 product:
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
     SCHEMA
-        category TAG SORTABLE
-        status TAG
-```
+        model        TEXT WEIGHT 2.0
+        description  TEXT
+        brand        TAG
+        condition    TAG
+        price        NUMERIC SORTABLE
 
-**Java** (Jedis):**
-
-```java
-import redis.clients.jedis.search.*;
-
-Schema schema = new Schema()
-    .addTextField("name", 1)
-    .addTagField("categories");  // TAG for exact matching
-
-IndexDefinition def = new IndexDefinition(IndexDefinition.Type.HASH);
-
-jedis.ftCreate("idx", IndexOptions.defaultOptions().setDefinition(def), schema);
-
-// Query with TAG syntax
-SearchResult result = jedis.ftSearch("idx", "@categories:{chef|runner}");
+# Query: exact-match TAG filter on brand
+FT.SEARCH idx:bicycle "@brand:{Velorim} @condition:{new}" DIALECT 2
 ```
 
 **Incorrect: Using TEXT when you don't need full-text features.**
 
 ```python
-# Overkill: TEXT for category adds unnecessary tokenization
-FT.CREATE idx:products ON HASH PREFIX 1 product:
+# Overkill: TEXT for brand/condition adds unnecessary tokenization
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
     SCHEMA
-        category TEXT
-        status TEXT
-```
-
-**Java** (Jedis):**
-
-```java
-// Bad: TEXT for categories adds unnecessary overhead
-Schema schema = new Schema()
-    .addTextField("name", 1)
-    .addTextField("categories", 1);  // Overkill for exact matching
+        model       TEXT
+        brand       TEXT
+        condition   TEXT
 ```
 
 **Correct: Use GEO for points, GEOSHAPE for areas.**
 
 ```python
 # GEO for point locations (stores, users)
-FT.CREATE idx:stores ON HASH PREFIX 1 store:
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
     SCHEMA
-        location GEO
+        store_location GEO
 
 # GEOSHAPE for areas (delivery zones, boundaries)
 FT.CREATE idx:zones ON JSON PREFIX 1 zone:
@@ -1092,283 +1194,1408 @@ FT.CREATE idx:zones ON JSON PREFIX 1 zone:
         $.boundary AS boundary GEOSHAPE
 ```
 
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START field_types
+// Mirrors SearchQuickstartExample.java
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.FTCreateParams;
+import redis.clients.jedis.search.IndexDataType;
+import redis.clients.jedis.search.schemafields.*;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    jedis.ftCreate("idx:bicycle",
+        FTCreateParams.createParams().on(IndexDataType.HASH).prefix("bicycle:"),
+        TextField.of("model").weight(2.0),
+        TextField.of("description"),
+        TagField.of("brand"),
+        TagField.of("condition"),
+        NumericField.of("price").sortable(),
+        GeoField.of("store_location"));
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/search_quickstart.py`](https://github.com/redis/redis-py/blob/master/doctests/search_quickstart.py)
+
+- Jedis: [`SearchQuickstartExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/SearchQuickstartExample.java)
+
 Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/indexing/geoindex/](https://redis.io/docs/latest/develop/interact/search-and-query/indexing/geoindex/)
 
-### 5.2 Index Only Fields You Query
+### 5.3 Choose the Right FT Command for the Job
+
+**Impact: HIGH (Picking FT.SEARCH vs FT.AGGREGATE vs FT.HYBRID up front avoids a full rewrite later)**
+
+The first decision before any query syntax is *which command to run*. Redis Search exposes three query commands with different design intents — picking the wrong one means rewriting the query later when you discover the command cannot express what you need.
+
+| Command | Use when... | Mental model | Min. Redis |
+|---------|-------------|--------------|------------|
+| `FT.SEARCH` | Straightforward document retrieval — agent wants matching docs back. | Ready-to-use: returns matching documents directly. | 2.0 module / 8.0 built-in |
+| `FT.AGGREGATE` | Faceting, analytics, computed fields, grouped or reshaped output. | Declarative result shaping: explicit `LOAD`, `APPLY`, `GROUPBY`, `REDUCE`, `SORTBY`. | 2.0 module / 8.0 built-in |
+| `FT.HYBRID` | Relevance must blend lexical (text) and semantic (vector) ranking with explicit fusion. | Declarative hybrid retrieval: `SEARCH` leg + `VSIM` leg + `COMBINE` fusion (RRF or LINEAR). | **8.4.0** (Redis Open Source) |
+
+**Correct: Pick the command that matches the shape of the answer you need.**
+
+```python
+# FT.SEARCH — "give me matching bicycles"
+FT.SEARCH idx:bicycle "@type:{mountain} @price:[100 500]"
+    LIMIT 0 10
+    RETURN 3 model brand price
+    DIALECT 2
+
+# FT.AGGREGATE — "what is the average price per brand?"
+FT.AGGREGATE idx:bicycle "@type:{mountain}"
+    GROUPBY 1 @brand
+    REDUCE AVG 1 @price AS avg_price
+    SORTBY 2 @avg_price DESC
+    DIALECT 2
+
+# FT.HYBRID (Redis ≥ 8.4.0) — "blend lexical relevance with vector similarity"
+FT.HYBRID idx:bicycle
+    SEARCH "mountain bicycle"
+    VSIM @description_embeddings $query_vec
+    KNN 2 K 10
+    COMBINE RRF 10                          # RRF <count> — number of fused results to keep
+    PARAMS 2 query_vec "<vector_blob>"
+    DIALECT 2
+```
+
+**Version gate — FT.HYBRID requires Redis ≥ 8.4.0.** For older Redis, fall back to the pre-filter + KNN pattern via `FT.SEARCH` (see `search-vector-query.md`):**
+
+```python
+# Fallback for Redis < 8.4.0 — pre-filter + KNN inside FT.SEARCH
+FT.SEARCH idx:bicycle "(@type:{mountain})=>[KNN 10 @description_embeddings $query_vec AS score]"
+    SORTBY score
+    PARAMS 2 query_vec "<vector_blob>"
+    DIALECT 2
+```
+
+**When to use FT.HYBRID's COMBINE modes:**
+
+- `COMBINE RRF` — Reciprocal Rank Fusion, rank-based fusion. Robust default; no tuning required.
+
+- `COMBINE LINEAR ALPHA <a> BETA <b>` — weighted score blend. Use when you have calibrated scores and want explicit control over the lexical/vector trade-off.
+
+**Incorrect: Using `FT.SEARCH` and then post-processing in the client to compute groups, averages, or score fusion. That work belongs inside Redis — pushing it client-side defeats the index.**
+
+```python
+# Bad: pulling raw docs and grouping in Python — defeats the index, blows up over the wire.
+docs = r.ft("idx:bicycle").search("@type:{mountain}").docs
+brands = collections.Counter(d.brand for d in docs)
+```
+
+**Decision tree:**
+
+1. Need computed fields, grouping, or custom output shape? → `FT.AGGREGATE`.
+
+2. Need blended lexical + vector ranking with explicit fusion? → `FT.HYBRID` (Redis ≥ 8.4.0).
+
+3. Otherwise (including filter-narrowed vector search) → `FT.SEARCH`.
+
+Cross-links:
+
+- Syntax of the query expression: `search-query-syntax.md`
+
+- KNN, range, and pre-filter vector queries: `search-vector-query.md`
+
+- Aggregate pipeline stages: `search-aggregate-pipeline.md`
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START command_selection
+// Mirrors SearchQuickstartExample.java
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.Query;
+import redis.clients.jedis.search.aggr.AggregationBuilder;
+import redis.clients.jedis.search.aggr.Reducers;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    jedis.ftSearch("idx:bicycle", new Query("@type:{mountain} @price:[100 500]"));
+    AggregationBuilder agg = new AggregationBuilder("@type:{mountain}")
+        .groupBy("@brand", Reducers.avg("@price").as("avg_price"));
+    jedis.ftAggregate("idx:bicycle", agg);
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/search_quickstart.py`](https://github.com/redis/redis-py/blob/master/doctests/search_quickstart.py)
+
+- Jedis: [`SearchQuickstartExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/SearchQuickstartExample.java)
+
+Reference: [https://redis.io/docs/latest/commands/ft.hybrid/](https://redis.io/docs/latest/commands/ft.hybrid/), [https://redis.io/docs/latest/commands/ft.search/](https://redis.io/docs/latest/commands/ft.search/), [https://redis.io/docs/latest/commands/ft.aggregate/](https://redis.io/docs/latest/commands/ft.aggregate/)
+
+### 5.4 Control Tokenization with NOSTEM, LANGUAGE, STOPWORDS, PHONETIC
+
+**Impact: MEDIUM (Tokenization choices determine recall — wrong stemmer or stopword set silently drops correct matches)**
+
+TEXT fields are tokenized, stemmed, and stopword-filtered at index time. Defaults work for English prose, but they silently drop matches when you index product SKUs, code identifiers, or non-English text. Tokenization is the most common reason `FT.EXPLAIN` shows a token expansion you didn't expect.
+
+**Correct: Pick tokenization options per field, based on the kind of text in it.**
+
+```python
+# A schema mixing prose, identifiers, and a non-English field
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
+    SCHEMA
+        # Prose — stem so "running" matches "run"
+        description    TEXT WEIGHT 1.0
+        # Model codes — don't stem, don't tokenize aggressively
+        model          TEXT NOSTEM
+        # Brand name — boost it in scoring
+        brand          TEXT WEIGHT 3.0
+        # Phonetic match for misspellings ("smyth" → "Smith")
+        owner_name     TEXT PHONETIC dm:en
+
+# Index-wide options
+FT.CREATE idx:bicycle_de ON HASH PREFIX 1 bicycle:
+    LANGUAGE german                              # default stemmer for all TEXT fields
+    STOPWORDS 3 der die und                      # custom stopword list (0 disables)
+    SCHEMA
+        description TEXT
+```
+
+**Option-by-option:**
+
+| Option | Scope | Effect |
+|--------|-------|--------|
+| `NOSTEM` | per TEXT field | Skip stemming. Use for SKUs, model codes, identifiers — anything where `running` ≠ `run`. |
+| `WEIGHT n` | per TEXT field | Multiplier on TF/IDF contribution. Default 1.0; raise for high-signal fields like `title` or `brand`. |
+| `LANGUAGE <lang>` | index-wide (or per-doc) | Selects the stemmer. Defaults to `english`. Supported: english, arabic, chinese, danish, dutch, finnish, french, german, hungarian, italian, norwegian, portuguese, romanian, russian, spanish, swedish, tamil, turkish. |
+| `STOPWORDS n w1 w2 ...` | index-wide | Override the default English stopword list. `STOPWORDS 0` disables stopword removal entirely (necessary when stopwords are meaningful in your domain, e.g., `"to be"`). |
+| `PHONETIC <matcher>` | per TEXT field | Index phonetic codes for fuzzy-name matching. Matchers: `dm:en` (English), `dm:fr`, `dm:pt`, `dm:es`. |
+
+**Diagnose tokenization with `FT.EXPLAIN`:**
+
+```python
+FT.EXPLAIN idx:bicycle "running shoes"
+# → INTERSECT { UNION{run, running} UNION{shoe, shoes} }
+# Stemming is expanding the terms. If "running" should be literal, mark the field NOSTEM.
+```
+
+**Incorrect: Using TEXT for identifiers (loses recall on SKUs), forgetting to disable stopwords for short queries that include them, or setting LANGUAGE on the wrong layer.**
+
+```python
+# Bad: SKU as TEXT without NOSTEM — "BIKE-2024" gets tokenized + stemmed
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
+    SCHEMA
+        sku TEXT                          # use NOSTEM, or use TAG
+
+# Bad: querying "to be" against an index with default stopwords
+FT.SEARCH idx:books "to be or not to be"
+# → effectively searches "" — every stopword is dropped.
+
+# Bad: putting LANGUAGE on a single field — it is an index-wide option
+FT.CREATE idx:bicycle ON HASH
+    SCHEMA description TEXT LANGUAGE french      # this is rejected
+```
+
+**Choosing TEXT vs TAG:**
+
+- TEXT: prose, descriptions, anything users type into a search box.
+
+- TAG: identifiers, categories, statuses, anything where exact match is what you want and tokenization is harmful.
+
+- A SKU like `BIKE-2024-XL` is almost always better as TAG.
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START tokenization
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.FTCreateParams;
+import redis.clients.jedis.search.schemafields.*;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    jedis.ftCreate("idx:bicycle",
+        FTCreateParams.createParams(),
+        TextField.of("description"),
+        TextField.of("model").noStem(),
+        TextField.of("brand").weight(3.0),
+        TextField.of("owner_name").phonetic("dm:en"),
+        TagField.of("sku"));
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources: No direct upstream example — authored from official Redis Search command documentation (https://redis.io/commands/ft.create/) and tokenization docs.
+
+Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/stemming/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/stemming/), [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/stopwords/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/stopwords/), [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/phonetic_matching/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/phonetic_matching/)
+
+### 5.5 Debug Queries with FT.EXPLAIN, FT.PROFILE, FT.INFO
+
+**Impact: MEDIUM (Targeted diagnostics turn "empty results" or "slow query" guesses into 10-second answers)**
+
+Three commands cover ~95% of search debugging: `FT.EXPLAIN` shows how the parser interpreted the query expression, `FT.PROFILE` measures stage-by-stage execution, and `FT.INFO` reports on the index itself (size, doc count, indexing failures, configuration). Reach for them *before* tweaking schema or rewriting queries.
+
+**Correct: Run the right diagnostic for the symptom.**
+
+```python
+# Symptom: "my query returns nothing" — see how the parser actually read it
+FT.EXPLAIN idx:bicycle "@brand:{Giant-Cycles}"
+#  → INTERSECT { @brand:TAG{Giant} NOT TAG{Cycles} }   ← the hyphen was treated as NOT!
+
+# Stemming surprise — see token expansion
+FT.EXPLAIN idx:bicycle "running shoes"
+#  → INTERSECT { UNION{run, running} UNION{shoe, shoes} }
+
+# Symptom: "slow query" — full stage timing
+FT.PROFILE idx:bicycle SEARCH QUERY "@type:{mountain} @price:[100 500]" LIMIT 0 20
+
+# Same for aggregate
+FT.PROFILE idx:bicycle AGGREGATE QUERY "@type:{mountain}"
+    GROUPBY 1 @brand REDUCE COUNT 0 AS n
+
+# Symptom: "I changed the schema and queries look weird" — inspect the index
+FT.INFO idx:bicycle
+```
+
+**What to look for in `FT.INFO`:**
+
+| Field | Means | What to do if it's off |
+|-------|-------|------------------------|
+| `num_docs` | Indexed doc count. | If lower than expected, check `hash_indexing_failures`. |
+| `num_records` | Total indexed terms (across all fields). | High vs `num_docs` may indicate over-indexing TEXT. |
+| `hash_indexing_failures` | Documents that failed indexing. | Inspect a failing doc with `JSON.GET` or `HGETALL`; usually a type mismatch on a NUMERIC field, or non-FLOAT32 vector blob. |
+| `inverted_sz_mb` | Memory used by the inverted index. | If large, consider `NOOFFSETS`, `NOFREQS`, `NOHL` (see `search-ft-create-options.md`). |
+| `indexing` | `1` if a background indexing job is running. | Wait for `0` before benchmarking. |
+| `percent_indexed` | Progress of initial scan. | `1.0` = fully indexed. |
+| `gc_stats` | Garbage-collector activity. | Frequent runs usually mean lots of deletes/updates. |
+| `attributes` | Per-field schema. | Verify a field is actually present at the alias you're querying. |
+
+**Reading `FT.PROFILE` output:**
+
+- Top-level `Total profile time` is the wall-clock cost.
+
+- The `Iterators profile` tree shows which query clause did how much work; a giant `Counter` on a TEXT term means it matched a huge fraction of docs.
+
+- `Parsing time` + `Pipeline creation time` + `Iterators profile` should account for ~all the time. If `Iterators profile` is small but `Total` is large, the bottleneck is post-processing (SORT, RETURN, LIMIT).
+
+**Incorrect: Editing schema or guessing at perf fixes before running diagnostics.**
+
+```python
+# Bad: "let me just add SORTABLE to every field and see what happens"
+# Worse: "let me re-create the index" before checking hash_indexing_failures
+```
+
+**Common errors and what they mean:**
+
+| Error | Likely cause |
+|-------|--------------|
+| `Unknown index name` | Typo, or index dropped. List with `FT._LIST`. |
+| `Syntax error at offset N` | Unbalanced `()` / `{}` / `[]`, or unescaped `-`/`.` inside a TAG. |
+| `Vector index initialization failed` | DIM mismatch, wrong TYPE, or non-array path. |
+| `Document already in index` | Duplicate key on `FT.ADD` (legacy); not produced by modern HSET/JSON.SET flow. |
+| `Document is already in index` after `JSON.SET` | Same key indexed by two indexes with overlapping prefixes — narrow the prefixes. |
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START debugging
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.Query;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    String explain = jedis.ftExplain("idx:bicycle", new Query("@brand:{Giant-Cycles}"));
+    System.out.println(explain);
+    System.out.println(jedis.ftProfileSearch("idx:bicycle", null,
+        new Query("@type:{mountain}").limit(0, 20)));
+    System.out.println(jedis.ftInfo("idx:bicycle"));
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources: No direct upstream example — authored from official Redis Search command documentation (https://redis.io/commands/ft.explain/, https://redis.io/commands/ft.profile/, https://redis.io/commands/ft.info/).
+
+Reference: [https://redis.io/docs/latest/commands/ft.explain/](https://redis.io/docs/latest/commands/ft.explain/), [https://redis.io/docs/latest/commands/ft.profile/](https://redis.io/docs/latest/commands/ft.profile/), [https://redis.io/docs/latest/commands/ft.info/](https://redis.io/docs/latest/commands/ft.info/)
+
+### 5.6 Index JSON Documents with JSONPath and Aliases
+
+**Impact: MEDIUM (Correct JSONPath + AS alias is the difference between queryable and unreachable fields)**
+
+For JSON documents, the schema declares `ON JSON` and each field is a JSONPath plus an `AS <alias>`. The alias is what you query against (`@alias:...`) — without `AS`, Redis Search generates one from the path that is awkward to type and easy to typo. Array elements (`$.tags[*]`) and nested objects (`$.address.city`) work seamlessly.
+
+**Correct: Index a JSON Bicycle catalog: TEXT, TAG, NUMERIC, an array of TAGs, and a vector.**
+
+```python
+# Source documents
+JSON.SET bicycle:0 $ '{
+  "model": "Hyperion",
+  "brand": "Velorim",
+  "description": "Lightweight mountain bicycle for trail riding",
+  "price": 1299,
+  "condition": "new",
+  "categories": ["mountain", "trail", "lightweight"],
+  "store_location": "-122.4,37.7",
+  "description_embeddings": [/* 1536 floats */]
+}'
+
+# Index — each path declared with AS <alias>, alias is what queries reference
+FT.CREATE idx:bicycle ON JSON PREFIX 1 bicycle:
+    SCHEMA
+        $.model              AS model             TEXT  WEIGHT 2.0
+        $.brand              AS brand             TAG
+        $.description        AS description       TEXT
+        $.price              AS price             NUMERIC SORTABLE
+        $.condition          AS condition         TAG
+        $.categories[*]      AS categories        TAG
+        $.store_location     AS store_location    GEO
+        $.description_embeddings AS description_embeddings VECTOR HNSW 6
+            TYPE FLOAT32
+            DIM 1536
+            DISTANCE_METRIC COSINE
+```
+
+**Query against the aliases, not the paths:**
+
+```python
+FT.SEARCH idx:bicycle "@brand:{Velorim} @categories:{mountain} @price:[100 1500]"
+    DIALECT 2
+```
+
+**JSONPath syntax that works inside FT.CREATE:**
+
+| Pattern | Meaning | Example |
+|---------|---------|---------|
+| `$.field` | Scalar at the top level. | `$.price AS price NUMERIC` |
+| `$.nested.field` | Scalar inside a nested object. | `$.address.city AS city TAG` |
+| `$.array[*]` | Each element of an array as a TAG/TEXT value. | `$.tags[*] AS tags TAG` |
+| `$.array[*].field` | A field from each object in an array. | `$.variants[*].sku AS skus TAG` |
+
+**Incorrect: Omitting `AS` (forces awkward generated aliases), trying to query the raw path, or pointing a vector field at a non-array JSON value.**
+
+```python
+# Bad: no AS — field is queryable as @"$.price" which is fragile and ugly.
+FT.CREATE idx:bicycle ON JSON PREFIX 1 bicycle:
+    SCHEMA
+        $.price NUMERIC
+
+# Bad: querying by JSON path instead of alias — wrong field identifier
+FT.SEARCH idx:bicycle "@$.price:[100 500]"   # use @price:[100 500]
+```
+
+**JSON + vector pairing:**
+
+- Embeddings must be stored as a JSON array of numbers.
+
+- `TYPE FLOAT32` + `DIM` must match the embedding model exactly (e.g., 1536 for OpenAI `text-embedding-3-small`, 768 for many open-source models).
+
+- `JSON.SET ... '[...]' '$.embedding'` accepts the array; the indexer encodes to FLOAT32 on read.
+
+**Gotcha: an array path indexed as `TAG` makes every element a discrete tag. The same path indexed as `TEXT` would *tokenize* each element. For categorical filters, prefer `TAG`.**
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START json_indexing
+// Mirrors JsonExample.java + HomeJsonExample.java
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.FTCreateParams;
+import redis.clients.jedis.search.IndexDataType;
+import redis.clients.jedis.search.schemafields.*;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    jedis.ftCreate("idx:bicycle",
+        FTCreateParams.createParams().on(IndexDataType.JSON).prefix("bicycle:"),
+        TextField.of("$.model").as("model").weight(2.0),
+        TagField.of("$.brand").as("brand"),
+        TextField.of("$.description").as("description"),
+        NumericField.of("$.price").as("price").sortable(),
+        TagField.of("$.categories[*]").as("categories"));
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/home_json.py`](https://github.com/redis/redis-py/blob/master/doctests/home_json.py), [`dt_json.py`](https://github.com/redis/redis-py/blob/master/doctests/dt_json.py)
+
+- Jedis: [`HomeJsonExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/HomeJsonExample.java), [`JsonExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/JsonExample.java)
+
+Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/indexing/json/](https://redis.io/docs/latest/develop/interact/search-and-query/indexing/json/), [https://redis.io/docs/latest/develop/data-types/json/path/](https://redis.io/docs/latest/develop/data-types/json/path/)
+
+### 5.7 Index Only Fields You Query
 
 **Impact: HIGH (Reduces index size and improves write performance)**
 
-Create indexes with only the fields you need to search, filter, or sort on.
+Create indexes with only the fields you need to search, filter, or sort on. Every indexed field costs memory on every write, even if no query ever touches it.
 
-**Correct: Index specific fields and use prefixes.**
-
-```python
-FT.CREATE idx:products ON HASH PREFIX 1 product:
-    SCHEMA
-        name TEXT WEIGHT 2.0
-        description TEXT
-        category TAG SORTABLE
-        price NUMERIC SORTABLE
-        location GEO
-```
-
-**Java** (Jedis):**
-
-```java
-import redis.clients.jedis.search.*;
-
-Schema schema = new Schema()
-    .addTextField("name", 1)
-    .addTagField("categories");
-
-// Good: Specify prefix to index only matching keys
-IndexDefinition def = new IndexDefinition(IndexDefinition.Type.HASH)
-    .setPrefixes("person:");
-
-jedis.ftCreate("idx", IndexOptions.defaultOptions().setDefinition(def), schema);
-```
-
-**Incorrect: Over-indexing or indexing unused fields.**
+**Correct: Index specific fields and constrain by prefix.**
 
 ```python
-# Bad: Indexing every field "just in case"
-FT.CREATE idx:products ON HASH PREFIX 1 product:
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
     SCHEMA
-        name TEXT
-        description TEXT
-        category TEXT
-        subcategory TEXT
-        brand TEXT
-        sku TEXT
-        price NUMERIC
-        cost NUMERIC
-        margin NUMERIC
-        ...
+        model        TEXT WEIGHT 2.0
+        description  TEXT
+        brand        TAG
+        condition    TAG
+        price        NUMERIC SORTABLE
+        store_location GEO
 ```
 
-**Java** (Jedis):**
+For JSON documents, see `search-json-indexing.md` — the same principles apply, but paths use the `$.path AS alias` form.
 
-```java
-// Bad: No prefix means all hashes get indexed
-IndexDefinition def = new IndexDefinition(IndexDefinition.Type.HASH);
-// This will index every hash in the database!
+For FT.CREATE flag options (`SKIPINITIALSCAN`, `NOOFFSETS`, `NOFIELDS`, etc.) and their memory trade-offs, see `search-ft-create-options.md`.
+
+**Incorrect: Over-indexing every field "just in case," or creating an index without a prefix.**
+
+```python
+# Bad: every field indexed, regardless of whether queries use it
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
+    SCHEMA
+        model TEXT description TEXT brand TEXT subcategory TEXT
+        sku TEXT cost NUMERIC margin NUMERIC supplier_id TAG ...
+
+# Bad: no prefix — every hash in the database gets indexed
+FT.CREATE idx:everything ON HASH SCHEMA model TEXT
 ```
 
 **Tips:**
 
-- Start with the minimum required fields
+- Start with the minimum required fields; add via `FT.ALTER` (subject to `MAXTEXTFIELDS` capacity) as new query patterns emerge.
 
-- Add fields as query patterns emerge
+- Use `FT.INFO` to monitor `inverted_sz_mb` and `num_records`.
 
-- Use `FT.INFO` to monitor index size
+- Always specify a prefix to avoid indexing unrelated keys.
 
-- Always specify a prefix to avoid indexing unrelated keys
+- Consider field-type alternatives: TAG beats TEXT for exact-match filters; SORTABLE on NUMERIC fields you'll use in `SORTBY`.
 
-Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/indexing/](https://redis.io/docs/latest/develop/interact/search-and-query/indexing/)
+**Client mirrors:**
 
-### 5.3 Manage Indexes for Zero-Downtime Updates
+```java
+// Jedis — STEP_START create_index
+// Mirrors SearchQuickstartExample.java
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.FTCreateParams;
+import redis.clients.jedis.search.IndexDataType;
+import redis.clients.jedis.search.schemafields.*;
 
-**Impact: MEDIUM (Use aliases for seamless index updates)**
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    jedis.ftCreate("idx:bicycle",
+        FTCreateParams.createParams().on(IndexDataType.HASH).prefix("bicycle:"),
+        TextField.of("model").weight(2.0),
+        TextField.of("description"),
+        TagField.of("brand"),
+        TagField.of("condition"),
+        NumericField.of("price").sortable(),
+        GeoField.of("store_location"));
+}
+// STEP_END
+```
 
-Use aliases to swap indexes without application changes.
+**Client mirrors — read exactly one:**
 
-**Correct: Use aliases for production indexes.**
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/search_quickstart.py`](https://github.com/redis/redis-py/blob/master/doctests/search_quickstart.py)
+
+- Jedis: [`SearchQuickstartExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/SearchQuickstartExample.java)
+
+Reference: [https://redis.io/docs/latest/commands/ft.create/](https://redis.io/docs/latest/commands/ft.create/), [https://redis.io/docs/latest/develop/interact/search-and-query/indexing/](https://redis.io/docs/latest/develop/interact/search-and-query/indexing/)
+
+### 5.8 Manage Indexes for Zero-Downtime Updates
+
+**Impact: MEDIUM (Aliases enable seamless index swaps; knowing FT.ALTER limits avoids re-indexing surprises)**
+
+Use index *aliases* so applications query a stable name while you swap the underlying index on schema changes. `FT.ALTER` can append fields to an existing index but cannot change a field's type, options, or remove it — anything beyond *adding* a field requires building a new index and swapping the alias.
+
+**Correct: Build the new index in parallel, then atomically swap the alias.**
 
 ```python
-# Create versioned index
-FT.CREATE idx:products_v2 ON HASH PREFIX 1 product:
+# 1. Build the new version of the index from scratch
+FT.CREATE idx:bicycle_v2 ON HASH PREFIX 1 bicycle:
     SCHEMA
-        name TEXT
-        category TAG SORTABLE
+        model TEXT WEIGHT 2.0
+        brand TAG
         price NUMERIC SORTABLE
 
-# Point alias to new index
-FT.ALIASADD products idx:products_v2
+# Wait until percent_indexed = 1.0
+FT.INFO idx:bicycle_v2
 
-# Application queries use alias
-FT.SEARCH products "@category:{electronics}"
+# 2. Point the application alias at the new index in one atomic step
+FT.ALIASUPDATE bicycle idx:bicycle_v2
 
-# Later, swap to new version
-FT.ALIASUPDATE products idx:products_v3
+# 3. Drop the old version
+FT.DROPINDEX idx:bicycle_v1
 ```
+
+**Adding a field is in-place — use `FT.ALTER`:**
+
+```python
+# Add a TEXT field with WEIGHT to an existing index — no rebuild needed
+FT.ALTER idx:bicycle SCHEMA ADD subtitle TEXT WEIGHT 1.5
+```
+
+**`FT.ALTER` limitations — when you must rebuild:**
+
+| Change | Can FT.ALTER do it? |
+|--------|---------------------|
+| Add a new field | Yes — `FT.ALTER ... SCHEMA ADD ...` |
+| Remove a field | **No** — must rebuild. |
+| Change a field's type (TEXT → TAG, etc.) | **No** — must rebuild. |
+| Change SORTABLE, NOSTEM, WEIGHT, PHONETIC | **No** — must rebuild. |
+| Change the index `PREFIX` | **No** — must rebuild. |
+| Change `LANGUAGE`, `STOPWORDS`, `NOFIELDS`, `NOOFFSETS` | **No** — must rebuild. |
+| Grow beyond `MAXTEXTFIELDS` capacity | **No** — must rebuild (set `MAXTEXTFIELDS` upfront on indexes you expect to grow). |
 
 **Useful management commands:**
 
 ```python
-# Check index info
-FT.INFO idx:products
-
-# Drop and recreate (non-blocking)
-FT.DROPINDEX idx:products
-FT.CREATE idx:products ...
-
-# List all indexes
+# List every search index
 FT._LIST
+
+# Inspect schema, doc count, indexing progress, memory
+FT.INFO idx:bicycle
+
+# Create an alias up front (so application code always uses the alias)
+FT.ALIASADD bicycle idx:bicycle_v1
+
+# Atomic swap when a v2 is ready
+FT.ALIASUPDATE bicycle idx:bicycle_v2
+
+# Drop an index (non-blocking)
+FT.DROPINDEX idx:bicycle_v1
+
+# Drop the index AND delete every indexed document
+FT.DROPINDEX idx:bicycle_v1 DD
 ```
 
-Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/administration/](https://redis.io/docs/latest/develop/interact/search-and-query/administration/)
-
-### 5.4 Use DIALECT 2 for Query Syntax
-
-**Impact: MEDIUM (Ensures consistent query behavior and access to modern features)**
-
-Use DIALECT 2 for consistent query behavior. Many Redis client libraries now default to DIALECT 2, and other dialects (1, 3, 4) are deprecated as of Redis 8.
-
-**Correct: Use DIALECT 2 explicitly or rely on modern client defaults.**
+**Incorrect: Dropping the live index before the new one is ready, or relying on a hard-coded index name in application code.**
 
 ```python
-# In raw commands, specify DIALECT 2
-FT.SEARCH idx:products "@name:laptop" DIALECT 2
+# Bad: drop-and-recreate while traffic is hitting the index
+FT.DROPINDEX idx:bicycle
+FT.CREATE idx:bicycle ...            # queries during the rebuild return errors
 
-FT.AGGREGATE idx:products "@category:{electronics}"
-    GROUPBY 1 @category
-    REDUCE COUNT 0 AS count
-    DIALECT 2
+# Bad: application queries idx:bicycle_v1 directly — no painless way to roll forward
 ```
 
-**Note: DIALECT 2 is required for vector search queries. Most modern client libraries (redis-py 6.0+, go-redis, Lettuce) now use DIALECT 2 by default.**
-
-**Why DIALECT 2:**
-
-- Consistent handling of special characters
-
-- Better NULL value handling
-
-- More predictable query parsing
-
-- Required for vector search
-
-Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/dialects/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/dialects/)
-
-### 5.5 Use SKIPINITIALSCAN for New Data Only Indexes
-
-**Impact: MEDIUM (Faster index creation, avoids indexing existing data)**
-
-Enable the `SKIPINITIALSCAN` option when creating an index if you only want to include items that are added after the index is created. This makes index creation faster and avoids indexing existing data that you don't need to search.
-
-**Correct: Use SKIPINITIALSCAN when you only need to index new data.**
-
-**Python** (redis-py):**
-
-```python
-import redis
-from redis.commands.search.field import TextField, TagField
-from redis.commands.search.indexDefinition import IndexDefinition, IndexType
-
-client = redis.Redis(host='localhost', port=6379)
-
-# Create index that only indexes new documents
-schema = (
-    TextField("name"),
-    TagField("categories")
-)
-
-definition = IndexDefinition(
-    prefix=["person:"],
-    index_type=IndexType.HASH
-)
-
-# SKIPINITIALSCAN - only index documents added after creation
-client.ft("idx").create_index(
-    schema,
-    definition=definition,
-    skip_initial_scan=True
-)
-```
-
-**Java** (Jedis):**
+**Client mirrors:**
 
 ```java
+// Jedis — STEP_START index_management
 import redis.clients.jedis.UnifiedJedis;
-import redis.clients.jedis.search.FTCreateParams;
-import redis.clients.jedis.search.IndexDataType;
-import redis.clients.jedis.search.schemafields.SchemaField;
-import redis.clients.jedis.search.schemafields.TagField;
 import redis.clients.jedis.search.schemafields.TextField;
 
 try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
-    FTCreateParams params = new FTCreateParams()
-        .on(IndexDataType.HASH)
-        .skipInitialScan();  // Only index new documents
-
-    jedis.ftCreate(
-        "idx",
-        params,
-        new SchemaField[]{
-            new TextField("name"),
-            new TagField("categories")
-        }
-    );
+    // Atomic alias swap
+    jedis.ftAliasUpdate("bicycle", "idx:bicycle_v2");
+    jedis.ftDropIndex("idx:bicycle_v1");
+    // Add a field in place
+    jedis.ftAlter("idx:bicycle", TextField.of("subtitle").weight(1.5));
 }
+// STEP_END
 ```
 
-**When to use SKIPINITIALSCAN:**
+**Client mirrors — read exactly one:**
 
-- Creating an index for a new feature where existing data is irrelevant
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
 
-- Setting up indexes in advance before data arrives
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
 
-- When existing data would be too large to scan during index creation
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
 
-- Event-driven architectures where you only care about new events
+- Do not read more than one client reference.
 
-**When NOT to use: default behavior is correct**
+Upstream sources:
 
-- You need to search existing data immediately after index creation
+- redis-py: [`doctests/search_quickstart.py`](https://github.com/redis/redis-py/blob/master/doctests/search_quickstart.py)
 
-- Migrating to a new index schema and need all data indexed
+- Jedis: [`SearchQuickstartExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/SearchQuickstartExample.java)
 
-- Most typical use cases where historical data matters
+Reference: [https://redis.io/docs/latest/commands/ft.aliasadd/](https://redis.io/docs/latest/commands/ft.aliasadd/), [https://redis.io/docs/latest/commands/ft.alter/](https://redis.io/docs/latest/commands/ft.alter/), [https://redis.io/docs/latest/commands/ft.dropindex/](https://redis.io/docs/latest/commands/ft.dropindex/)
 
-**Note: The default behavior (without SKIPINITIALSCAN) indexes all existing matching keys, which is usually what you want.**
+### 5.9 Master Redis Search Query Syntax
+
+**Impact: HIGH (Correct operators and escaping avoid silent empty-result bugs)**
+
+The Redis Search query DSL composes operators (AND, OR, NOT, optional), field-scoped predicates (`@field:value`), and delimiter-specific value forms (TAG `{}`, NUMERIC `[]`, TEXT phrase `""`). Most "empty result" bugs come from picking the wrong delimiter or forgetting to escape special characters in TAG values.
+
+Before writing the query expression, anchor terminology in `references/search-syntax-primitives.md` (Query Term, Field Identifier, Delimiters, Operators).
+
+**Correct: Operator and delimiter reference, against the canonical Bicycle dataset.**
+
+```python
+# Field scoping — TEXT (free-text, tokenized + stemmed)
+FT.SEARCH idx:bicycle "@description:wireless"                 DIALECT 2
+
+# TAG — exact match with { }; pipe = OR
+FT.SEARCH idx:bicycle "@condition:{new|refurbished}"          DIALECT 2
+
+# NUMERIC range — inclusive [], exclusive ( prefix, +inf/-inf supported
+FT.SEARCH idx:bicycle "@price:[100 500]"                      DIALECT 2
+FT.SEARCH idx:bicycle "@price:[(100 (500]"                    DIALECT 2
+FT.SEARCH idx:bicycle "@price:[-inf 200]"                     DIALECT 2
+
+# TEXT phrase — quotes for exact ordering
+FT.SEARCH idx:bicycle "\"mountain bicycle\""                  DIALECT 2
+
+# TEXT prefix / suffix / infix wildcards
+FT.SEARCH idx:bicycle "@model:bik*"                           DIALECT 2
+FT.SEARCH idx:bicycle "@model:*ike*"                          DIALECT 2
+
+# Fuzzy match — %term% (1 edit), %%term%% (2 edits), %%%term%%% (3 edits)
+FT.SEARCH idx:bicycle "@model:%bicycle%"                      DIALECT 2
+
+# Boolean — implicit AND (space), | OR, - NOT, ~ optional, () grouping
+FT.SEARCH idx:bicycle "@type:{mountain} -@condition:{used}"   DIALECT 2
+FT.SEARCH idx:bicycle "(@type:{mountain}|@type:{road}) @price:[-inf 500]" DIALECT 2
+
+# GEO — point + radius
+FT.SEARCH idx:bicycle "@store_location:[-122.4 37.7 50 km]"   DIALECT 2
+
+# GEOSHAPE — WITHIN polygon (DIALECT 3+, but FT.CREATE marks the field)
+FT.SEARCH idx:zones "@boundary:[WITHIN $poly]" PARAMS 2 poly "POLYGON((...))" DIALECT 3
+```
+
+**Correct: TAG escaping rules** — these are the single biggest source of empty-result bugs. TAG values are *not* tokenized; hyphens, dots, commas, `@`, `:`, and spaces inside a tag must be escaped with a leading backslash, and the whole value lives inside `{}`.**
+
+```python
+# TAG with hyphen — must escape
+FT.SEARCH idx:bicycle "@brand:{Giant\\-Cycles}"               DIALECT 2
+
+# TAG with dot — must escape
+FT.SEARCH idx:bicycle "@email:{user\\@example\\.com}"         DIALECT 2
+
+# TAG with space — escape the space (or use double-quotes inside the braces)
+FT.SEARCH idx:bicycle "@brand:{Trek\\ Bicycles}"              DIALECT 2
+```
+
+**Incorrect: Using `()` for TAG values, `{}` for TEXT, forgetting to escape hyphens, or mixing delimiters.**
+
+```python
+# Bad: () around a TAG value — parses as a TEXT clause, returns nothing
+FT.SEARCH idx:bicycle "@condition:(new)"
+
+# Bad: unescaped hyphen in a TAG — RQE treats the dash as NOT
+FT.SEARCH idx:bicycle "@brand:{Giant-Cycles}"   # returns 0 results
+
+# Bad: NUMERIC values inside {} — silently empty
+FT.SEARCH idx:bicycle "@price:{100 500}"
+```
+
+| Delimiter | Use | Example |
+|-----------|-----|---------|
+| `( )` | TEXT phrase grouping / boolean grouping | `(@type:{product} \| @type:{post})` |
+| `{ }` | TAG exact-match (with `\|` for alternatives) | `@condition:{new\|refurbished}` |
+| `[ ]` | NUMERIC range, GEO, GEOSHAPE, VECTOR_RANGE | `@price:[100 500]`, `@price:[-inf 200]` |
+| `" "` | exact phrase match in TEXT | `"mountain bicycle"` |
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START query_syntax
+// Mirrors QueryFtExample.java + QueryEmExample.java
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.Query;
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    // TAG with escaped hyphen — note Java requires double-escaping the backslash
+    jedis.ftSearch("idx:bicycle", new Query("@brand:{Giant\\-Cycles}"));
+    jedis.ftSearch("idx:bicycle", new Query("@price:[100 500]"));
+    jedis.ftSearch("idx:bicycle",
+        new Query("(@type:{mountain}|@type:{road}) -@condition:{used}"));
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/query_ft.py`](https://github.com/redis/redis-py/blob/master/doctests/query_ft.py), [`query_em.py`](https://github.com/redis/redis-py/blob/master/doctests/query_em.py), [`query_geo.py`](https://github.com/redis/redis-py/blob/master/doctests/query_geo.py), [`query_range.py`](https://github.com/redis/redis-py/blob/master/doctests/query_range.py)
+
+- Jedis: [`QueryFtExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/QueryFtExample.java), [`QueryEmExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/QueryEmExample.java), [`QueryGeoExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/QueryGeoExample.java)
+
+Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/query/](https://redis.io/docs/latest/develop/interact/search-and-query/query/), [https://redis.io/docs/latest/develop/interact/search-and-query/query/#tokenization](https://redis.io/docs/latest/develop/interact/search-and-query/query/#tokenization)
+
+### 5.10 Paginate Large Aggregations with FT.CURSOR
+
+**Impact: MEDIUM (Cursors stream million-row aggregates without blowing memory; releasing them avoids server-side leaks)**
+
+`FT.AGGREGATE ... LIMIT 0 1000000` materializes the whole result on the server before responding. For large aggregates (millions of groups, long fan-outs), use `WITHCURSOR` and stream batches via `FT.CURSOR READ`. Cursors that aren't read or deleted live until `MAXIDLE` elapses and then are GC'd — explicitly `FT.CURSOR DEL` when you're done.
+
+**Correct: Open a cursor, drain it in batches, release it.**
+
+```python
+# Open the cursor — COUNT 1000 = up to 1000 rows per batch, MAXIDLE in ms
+FT.AGGREGATE idx:bicycle "*"
+    GROUPBY 1 @brand
+        REDUCE COUNT 0 AS bike_count
+    SORTBY 2 @bike_count DESC
+    WITHCURSOR COUNT 1000 MAXIDLE 30000
+    DIALECT 2
+# → reply: { rows..., cursor_id: 12345 }   (cursor_id = 0 means exhausted)
+
+# Pull the next batch
+FT.CURSOR READ idx:bicycle 12345 COUNT 1000
+# → reply: { rows..., cursor_id: 12345 or 0 }
+
+# Release explicitly when you stop early — don't wait for MAXIDLE
+FT.CURSOR DEL idx:bicycle 12345
+```
+
+**Cursor lifecycle:**
+
+- `COUNT n` — max rows per response (the server may return fewer).
+
+- `MAXIDLE ms` — server discards the cursor after this idle time. Default is server-config-dependent (typically 30s).
+
+- A returned `cursor_id` of `0` means the result set is fully drained.
+
+- Cursors are scoped to a specific index; the read/del calls take both `<index>` and `<cursor_id>`.
+
+**Incorrect: Leaking cursors or trying to paginate aggregates with `LIMIT offset n` for large `n`.**
+
+```python
+# Bad: LIMIT 1000000 5000 — server must compute and skip the first million rows
+FT.AGGREGATE idx:bicycle "*" GROUPBY 1 @brand REDUCE COUNT 0 AS n
+    SORTBY 2 @n DESC
+    LIMIT 1000000 5000
+    DIALECT 2
+
+# Bad: Open WITHCURSOR, take first batch, never call FT.CURSOR DEL.
+# Cursor leaks until MAXIDLE; long-running ETL jobs accumulate them.
+```
+
+**When to use cursors:**
+
+- Aggregations expected to return > ~10k rows.
+
+- Streaming results into an ETL/export pipeline.
+
+- Background analytics where you want bounded memory at both ends.
+
+**When NOT needed:**
+
+- Top-N analytics (`SORTBY ... LIMIT 0 100`) — the result fits in one response.
+
+- Real-time dashboard queries where you only show the top page.
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START aggregate_cursor
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.aggr.AggregationBuilder;
+import redis.clients.jedis.search.aggr.AggregationResult;
+import redis.clients.jedis.search.aggr.Reducers;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    AggregationBuilder agg = new AggregationBuilder("*")
+        .groupBy("@brand", Reducers.count().as("bike_count"))
+        .cursor(1000, 30000)
+        .dialect(2);
+    AggregationResult res = jedis.ftAggregate("idx:bicycle", agg);
+    long cursorId = res.getCursorId();
+    while (cursorId != 0) {
+        res = jedis.ftCursorRead("idx:bicycle", cursorId, 1000);
+        cursorId = res.getCursorId();
+    }
+    // jedis.ftCursorDel("idx:bicycle", cursorId) if exiting early
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources: No direct upstream example — authored from official Redis Search command documentation (https://redis.io/commands/ft.aggregate/, https://redis.io/commands/ft.cursor-read/, https://redis.io/commands/ft.cursor-del/).
+
+Reference: [https://redis.io/docs/latest/commands/ft.aggregate/](https://redis.io/docs/latest/commands/ft.aggregate/), [https://redis.io/docs/latest/commands/ft.cursor-read/](https://redis.io/docs/latest/commands/ft.cursor-read/), [https://redis.io/docs/latest/commands/ft.cursor-del/](https://redis.io/docs/latest/commands/ft.cursor-del/)
+
+### 5.11 Run KNN, Range, and Pre-Filtered Vector Queries
+
+**Impact: HIGH (Correct vector-query syntax avoids full-scan fallbacks and lets pre-filters cut search space 10–100x)**
+
+Vector queries live inside `FT.SEARCH` as a `=>[KNN ...]` or `[VECTOR_RANGE ...]` clause. The query *expression* on the left side acts as a pre-filter; the vector clause then runs over the surviving candidate set, not the entire index. Forgetting to pre-filter is the most common cause of slow or low-recall vector queries.
+
+`DIALECT 2` is required for the `=>[KNN ...]` attribute form. The vector blob is bound through `PARAMS` rather than inlined.
+
+**Correct: KNN, range, and hybrid pre-filter forms against the canonical Bicycle dataset (vector field `description_embeddings`, dim 1536).**
+
+```python
+# Pure KNN — 10 nearest neighbours, no pre-filter
+FT.SEARCH idx:bicycle "*=>[KNN 10 @description_embeddings $vec AS score]"
+    SORTBY score
+    PARAMS 2 vec "<vector_blob>"
+    DIALECT 2
+
+# Pre-filtered KNN — narrow by TAG + NUMERIC first, then KNN over survivors
+FT.SEARCH idx:bicycle "(@type:{mountain} @price:[100 500])=>[KNN 10 @description_embeddings $vec AS score]"
+    SORTBY score
+    PARAMS 2 vec "<vector_blob>"
+    RETURN 4 model brand price score
+    DIALECT 2
+
+# Range query — every doc within radius 0.5 (COSINE distance)
+FT.SEARCH idx:bicycle "@description_embeddings:[VECTOR_RANGE 0.5 $vec]=>{$yield_distance_as: dist}"
+    SORTBY dist
+    PARAMS 2 vec "<vector_blob>"
+    DIALECT 2
+
+# Tune recall vs latency per query — HNSW only
+FT.SEARCH idx:bicycle "*=>[KNN 10 @description_embeddings $vec EF_RUNTIME 200 AS score]"
+    SORTBY score
+    PARAMS 2 vec "<vector_blob>"
+    DIALECT 2
+```
+
+**Why this matters:**
+
+- `AS score` aliases the distance so you can `SORTBY` and `RETURN` it.
+
+- `PARAMS` binds the binary vector blob — never inline it in the query string.
+
+- The pre-filter prefix `(@type:{mountain} @price:[100 500])` is applied *before* the vector search, slashing the work for HNSW.
+
+- `EF_RUNTIME` raises HNSW search effort per-query; the index-time `EF_CONSTRUCTION` is independent.
+
+**Incorrect: Inlining the vector, omitting `DIALECT 2`, or running a wide-open KNN when you could pre-filter.**
+
+```python
+# Bad: no PARAMS — vector blob does not survive RESP encoding cleanly
+FT.SEARCH idx:bicycle "*=>[KNN 10 @description_embeddings <raw-bytes>]" DIALECT 2
+
+# Bad: forgot DIALECT 2 — older default rejects the attribute form
+FT.SEARCH idx:bicycle "*=>[KNN 10 @description_embeddings $vec AS score]" PARAMS 2 vec "..."
+
+# Bad: KNN over the whole index when a TAG pre-filter would cut 99% of candidates
+FT.SEARCH idx:bicycle "*=>[KNN 10 @description_embeddings $vec AS score]"
+    PARAMS 2 vec "..." DIALECT 2
+```
+
+**Hybrid lexical + vector ranking with explicit fusion (Redis ≥ 8.4.0): Use `FT.HYBRID` — see `search-command-selection.md`. The pre-filter pattern above is still the right tool for *filter-narrowed* vector search; `FT.HYBRID` is for *blended ranking* with RRF or LINEAR fusion.**
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START vector_query
+// Mirrors VectorSearchExample.java
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.Query;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
+byte[] vecBlob = floatArrayToBytes(queryEmbedding);  // little-endian FLOAT32
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    Query q = new Query(
+        "(@type:{mountain} @price:[100 500])=>[KNN 10 @description_embeddings $vec AS score]")
+        .setSortBy("score", true)
+        .returnFields("model", "brand", "price", "score")
+        .addParam("vec", vecBlob)
+        .dialect(2)
+        .limit(0, 10);
+    jedis.ftSearch("idx:bicycle", q);
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/search_vss.py`](https://github.com/redis/redis-py/blob/master/doctests/search_vss.py), [`query_combined.py`](https://github.com/redis/redis-py/blob/master/doctests/query_combined.py)
+
+- Jedis: [`VectorSearchExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/VectorSearchExample.java)
+
+Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/), [https://redis.io/docs/latest/develop/interact/search-and-query/query/vector-search/](https://redis.io/docs/latest/develop/interact/search-and-query/query/vector-search/)
+
+### 5.12 Shape Search Results with RETURN, SORTBY, HIGHLIGHT, SUMMARIZE
+
+**Impact: MEDIUM (Returning only needed fields and using SORTABLE cuts payload + latency by 2–10x)**
+
+By default `FT.SEARCH` returns full documents — expensive when you only need a few fields, or a count, or a UI-ready snippet. The result-shaping clauses (`RETURN`, `NOCONTENT`, `LIMIT`, `SORTBY`, `HIGHLIGHT`, `SUMMARIZE`) trim the response server-side and pre-format text for display.
+
+**Correct: Shape the response to exactly what the caller needs.**
+
+```python
+# Count only — no documents returned
+FT.SEARCH idx:bicycle "@type:{mountain}" LIMIT 0 0 DIALECT 2
+
+# IDs only — NOCONTENT skips the field payload
+FT.SEARCH idx:bicycle "@type:{mountain}" NOCONTENT LIMIT 0 20 DIALECT 2
+
+# Specific fields only — RETURN n field1 field2 ...
+FT.SEARCH idx:bicycle "@type:{mountain}"
+    RETURN 3 model brand price
+    LIMIT 0 20
+    DIALECT 2
+
+# Sort by an indexed field — requires SORTABLE on the field at FT.CREATE time
+FT.SEARCH idx:bicycle "@type:{mountain}"
+    SORTBY price ASC
+    LIMIT 0 10
+    RETURN 3 model brand price
+    DIALECT 2
+
+# Highlight matched terms with HTML tags
+FT.SEARCH idx:bicycle "wireless"
+    HIGHLIGHT FIELDS 1 description TAGS "<b>" "</b>"
+    DIALECT 2
+
+# Summarize: extract up to 3 fragments of 20 tokens each from @description
+FT.SEARCH idx:bicycle "wireless"
+    SUMMARIZE FIELDS 1 description FRAGS 3 LEN 20 SEPARATOR " ... "
+    DIALECT 2
+```
+
+**Why these matter:**
+
+- `RETURN n` is the single biggest perf win for wide schemas — typical 50% latency cut when you stop sending unused fields.
+
+- `SORTBY` on a non-`SORTABLE` field falls back to a row-by-row sort over the result page; on a `SORTABLE NUMERIC` field it's near-free.
+
+- `NOCONTENT` is what `FT.SEARCH` wants when you only need the matching keys (e.g., to pipeline a follow-up `MGET`).
+
+- `LIMIT 0 0` is the canonical count idiom — total appears in position 0 of the reply.
+
+- `HIGHLIGHT` and `SUMMARIZE` only operate on TEXT fields and assume the field was indexed without `NOOFFSETS`.
+
+**Incorrect: Pagination with deep offsets, sorting non-SORTABLE fields at high LIMIT, fetching full docs to throw away most fields.**
+
+```python
+# Bad: deep pagination — server must scan + sort offset+page rows
+FT.SEARCH idx:bicycle "*" LIMIT 100000 20
+
+# Bad: SORTBY a TEXT field that wasn't marked SORTABLE — falls back to in-page sort
+FT.SEARCH idx:bicycle "*" SORTBY description ASC LIMIT 0 1000
+
+# Bad: fetching the entire doc when only 3 fields are used in the UI
+FT.SEARCH idx:bicycle "*" LIMIT 0 50
+```
+
+**Pagination patterns:**
+
+- Up to a few thousand rows: `LIMIT offset n` is fine.
+
+- Beyond that, switch to **search-after** patterns (sort by a stable cursor like `@id` or `@created_at`, then `FILTER @id > $last` on the next page).
+
+- For `FT.AGGREGATE` over very large result sets, use `WITHCURSOR` (see `search-aggregate-cursors.md`).
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START result_shaping
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.Query;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    Query q = new Query("@type:{mountain}")
+        .returnFields("model", "brand", "price")
+        .setSortBy("price", true)
+        .limit(0, 20)
+        .dialect(2);
+    jedis.ftSearch("idx:bicycle", q);
+
+    Query countOnly = new Query("@type:{mountain}").limit(0, 0).dialect(2);
+    long total = jedis.ftSearch("idx:bicycle", countOnly).getTotalResults();
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: covered across the upstream `doctests/query_*.py` set, including [`doctests/query_ft.py`](https://github.com/redis/redis-py/blob/master/doctests/query_ft.py)
+
+- Jedis: covered across the upstream `Query*Example.java` set, including [`QueryFtExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/QueryFtExample.java)
+
+Reference: [https://redis.io/docs/latest/commands/ft.search/](https://redis.io/docs/latest/commands/ft.search/), [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/highlight/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/highlight/)
+
+### 5.13 Tune FT.CREATE Options for Memory and Indexing Cost
+
+**Impact: LOW (Disabling unused index features can cut memory 20–50% on large indexes)**
+
+`FT.CREATE` ships sensible defaults that pay for features most apps want — offsets for highlighting, frequencies for scoring, per-document field map for `FT.AGGREGATE LOAD`. On a very large index, those costs add up. Several flags let you opt out where you don't need them, and a few flags change the *behavior* of index creation itself (`SKIPINITIALSCAN`, `TEMPORARY`).
+
+**Correct: Pick the flags whose trade-offs match your workload.**
+
+```python
+# A lean index — no highlight, no field-frequency scoring, no field map
+FT.CREATE idx:logs ON HASH PREFIX 1 log:
+    NOOFFSETS                       # don't store term offsets → no HIGHLIGHT/SUMMARIZE/phrase queries
+    NOHL                            # disable highlight payload (subset of NOOFFSETS savings)
+    NOFREQS                         # don't store term frequencies → lighter scoring
+    NOFIELDS                        # don't store per-doc field bitmap → no @field-scoped queries
+    SCHEMA
+        message TEXT
+
+# Only index new documents (skip the initial scan over existing keys)
+FT.CREATE idx:events ON HASH PREFIX 1 event:
+    SKIPINITIALSCAN
+    SCHEMA
+        topic TAG
+        ts NUMERIC SORTABLE
+
+# Pre-allocate room for FT.ALTER (cannot grow beyond MAXTEXTFIELDS slots later)
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
+    MAXTEXTFIELDS                   # reserves capacity for adding TEXT fields later
+    SCHEMA
+        model TEXT
+
+# Custom stopword list (or disable entirely with STOPWORDS 0)
+FT.CREATE idx:books ON HASH PREFIX 1 book:
+    STOPWORDS 0                     # disable stopword filtering altogether
+    SCHEMA
+        title TEXT
+        description TEXT
+
+# Auto-expire the index if idle (in seconds) — useful for transient indexes
+FT.CREATE idx:session_search ON HASH PREFIX 1 sess:
+    TEMPORARY 3600
+    SCHEMA
+        user_id TAG
+        last_query TEXT
+```
+
+**Trade-off table:**
+
+| Flag | Saves | Costs |
+|------|-------|-------|
+| `NOOFFSETS` | Term offsets — can be 30–50% of TEXT-heavy index size. | Disables `HIGHLIGHT`, `SUMMARIZE`, and phrase queries with `$slop`/`$inorder`. |
+| `NOHL` | Highlight payload only. | Disables `HIGHLIGHT` (offsets still kept for phrase queries). |
+| `NOFREQS` | Per-term frequency counters. | Scoring quality degrades; BM25 / TFIDF can't differentiate doc relevance well. |
+| `NOFIELDS` | Per-document field bitmap. | Disables `@field:` scoping on queries — every term searches all TEXT fields. |
+| `SKIPINITIALSCAN` | Time + IO of scanning existing keys. | Existing matching documents are not in the index — only new HSET/JSON.SET. |
+| `MAXTEXTFIELDS` | n/a (reserves capacity). | Slightly larger empty-index footprint. Use only if you'll add fields via `FT.ALTER`. |
+| `STOPWORDS 0` | Stopword filtering. | Common words (the, and, of) are now searchable and inflate the inverted index. |
+| `TEMPORARY <sec>` | n/a (sets a TTL on the index). | Index is reaped after `<sec>` of idleness — must be re-created. |
+
+- Creating an index for a new feature where existing documents are irrelevant.
+
+- Setting up an index ahead of a data load that will fully populate it.
+
+- The dataset is too large for initial scan latency to be acceptable.
+
+- Event-driven architectures that only care about new events going forward.
+
+- You need historical documents to appear in search immediately.
+
+- Migrating an existing dataset to a new schema (the new index must include all existing docs).
+
+- Most general-purpose search use cases.
+
+**Incorrect: Disabling features you actually use, or combining mutually destructive flags.**
+
+```python
+# Bad: NOOFFSETS on an index that highlights snippets in the UI.
+FT.CREATE idx:blog ON HASH PREFIX 1 post:
+    NOOFFSETS
+    SCHEMA title TEXT body TEXT
+# Later — fails or returns no highlights:
+FT.SEARCH idx:blog "redis" HIGHLIGHT FIELDS 1 body
+
+# Bad: NOFIELDS with field-scoped queries — every @-prefixed term becomes a global term
+FT.CREATE idx:logs ON HASH PREFIX 1 log: NOFIELDS SCHEMA service TAG message TEXT
+FT.SEARCH idx:logs "@service:{api}"     # no longer effective
+
+# Bad: SKIPINITIALSCAN when migrating data into a new index
+FT.CREATE idx:v2 ON HASH PREFIX 1 product: SKIPINITIALSCAN SCHEMA name TEXT
+# Existing product:* keys are never indexed; queries return only new docs.
+```
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START ft_create_options
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.FTCreateParams;
+import redis.clients.jedis.search.IndexDataType;
+import redis.clients.jedis.search.schemafields.*;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    jedis.ftCreate("idx:events",
+        FTCreateParams.createParams().on(IndexDataType.HASH).prefix("event:").skipInitialScan(),
+        TagField.of("topic"), NumericField.of("ts").sortable());
+
+    jedis.ftCreate("idx:logs",
+        FTCreateParams.createParams().on(IndexDataType.HASH).prefix("log:")
+            .noOffsets().noFields().noFrequencies(),
+        TextField.of("message"));
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/search_quickstart.py`](https://github.com/redis/redis-py/blob/master/doctests/search_quickstart.py)
+
+- Jedis: [`SearchQuickstartExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/SearchQuickstartExample.java)
 
 Reference: [https://redis.io/docs/latest/commands/ft.create/](https://redis.io/docs/latest/commands/ft.create/)
 
-### 5.6 Write Efficient Queries
+### 5.14 Use DIALECT 2 for Query Syntax
 
-**Impact: HIGH (Proper filtering reduces query time by orders of magnitude)**
+**Impact: MEDIUM (Ensures consistent query behavior and access to modern features)**
 
-Be specific and use filters to reduce the result set early.
+Pass `DIALECT 2` on every `FT.SEARCH` / `FT.AGGREGATE` / `FT.HYBRID` call. From Redis 8 onward, **DIALECT 2 is the only supported value** — dialects 1, 3, and 4 are deprecated and removed in current Redis Open Source. Vector query attributes (the `=>[KNN ...]` form) require DIALECT 2 to parse.
 
-**Correct: Use specific filters and limit results.**
+**Correct: Specify DIALECT 2 explicitly, or rely on modern client defaults.**
 
 ```python
-# Good: Specific query with filters
-FT.SEARCH idx:products "@category:{electronics} @price:[100 500]"
+# In raw commands, specify DIALECT 2 at the end
+FT.SEARCH idx:bicycle "@model:hyperion" DIALECT 2
+
+FT.AGGREGATE idx:bicycle "@type:{mountain}"
+    GROUPBY 1 @brand
+    REDUCE COUNT 0 AS bike_count
+    DIALECT 2
+```
+
+**Note on Redis 8 and DIALECT: Redis 8 (built-in Redis Search) accepts only DIALECT 2. The `DEFAULT_DIALECT` `FT.CONFIG` knob no longer accepts other values. Older Redis 7.x / RediSearch-module deployments still respect dialect 1; if you target both, set `DIALECT 2` explicitly so behavior is identical across versions.**
+
+**Why DIALECT 2:**
+
+- Required for vector search (`=>[KNN ...]` attribute syntax).
+
+- Required for `PARAMS` placeholder binding.
+
+- Predictable handling of special characters and NULL-like missing fields.
+
+- The only dialect that will be supported going forward.
+
+**Incorrect: Relying on the server-side default with a client library that pins an older dialect.**
+
+```python
+# Bad: omitting DIALECT in a vector query with a legacy redis-py — falls back to DIALECT 1 and rejects =>[KNN ...]
+FT.SEARCH idx:bicycle "*=>[KNN 10 @embedding $vec AS score]" PARAMS 2 vec "..."
+```
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START dialect
+// Mirrors SearchQuickstartExample.java
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.FTSearchParams;
+import redis.clients.jedis.search.SearchResult;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    SearchResult res = jedis.ftSearch("idx:bicycle",
+        "@model:hyperion",
+        FTSearchParams.searchParams().dialect(2));
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/search_quickstart.py`](https://github.com/redis/redis-py/blob/master/doctests/search_quickstart.py)
+
+- Jedis: [`SearchQuickstartExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/SearchQuickstartExample.java)
+
+Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/dialects/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/dialects/)
+
+### 5.15 Write Performant Queries
+
+**Impact: HIGH (Pre-filters, SORTABLE fields, and tight RETURN cut query latency by orders of magnitude)**
+
+This rule is performance-focused — syntax details live in `search-query-syntax.md`, vector queries in `search-vector-query.md`, aggregate pipelines in `search-aggregate-pipeline.md`. The lever is the same in every case: narrow the candidate set as early as possible, return as little as possible, and use indexed sort paths.
+
+**Correct: Pre-filter, sort on `SORTABLE` fields, return only what you use.**
+
+```python
+# Specific filters drop the candidate set before any scoring
+FT.SEARCH idx:bicycle "@type:{mountain} @price:[100 500]"
+    SORTBY price ASC                       # price is SORTABLE NUMERIC → near-free
     LIMIT 0 20
-    RETURN 3 name price category
+    RETURN 3 model brand price
+    DIALECT 2
 
-# Good: Use SORTBY and LIMIT
-FT.SEARCH idx:products "@name:laptop"
-    SORTBY price ASC
-    LIMIT 0 10
+# Pre-filtered vector query — TAG + NUMERIC cut 99% of vectors before KNN
+FT.SEARCH idx:bicycle "(@type:{mountain} @price:[100 500])=>[KNN 10 @description_embeddings $vec AS score]"
+    SORTBY score
+    PARAMS 2 vec "<vector_blob>"
+    RETURN 4 model brand price score
+    DIALECT 2
 ```
 
-**Incorrect: Broad queries returning large result sets.**
+**The performance levers — in priority order:**
 
 ```python
-# Bad: Wildcard prefix scans entire index
-FT.SEARCH idx:products "*" LIMIT 0 10000
+# Diagnose a slow query
+FT.PROFILE idx:bicycle SEARCH QUERY "@type:{mountain}" LIMIT 0 20
 
-# Bad: Loading all fields from source document
-FT.AGGREGATE idx:products "*" LOAD *
+# See whether stemming/expansion is bloating the term list
+FT.EXPLAIN idx:bicycle "running shoes"
 ```
 
-**Performance tips:**
+1. **Narrow with TAG / NUMERIC predicates first.** They're cheaper than TEXT scoring and cut candidate counts dramatically. See `search-query-syntax.md` for syntax.
+
+2. **`SORTBY` on `SORTABLE` fields.** Non-sortable sorting falls back to a row-by-row sort over the page. Mark `NUMERIC SORTABLE` and `TAG SORTABLE` on any field you'll order by.
+
+3. **`LIMIT 0 n` aggressively.** Default page size returns 10; raising to 1000 is fine, raising to 100000 will hurt.
+
+4. **`RETURN n f1 f2 ...`.** Stops Redis from materializing fields you'll throw away. Combine with `NOCONTENT` when you only need keys.
+
+5. **`NOSTEM` and `TAG` over `TEXT` for identifiers.** Tokenization is expensive and easy to misconfigure (see `search-text-tokenization.md`).
+
+6. **Profile, don't guess.** `FT.PROFILE` reports per-stage timing; `FT.EXPLAIN` shows how the parser interpreted the query (see `search-debugging.md`).
+
+**Incorrect: Wildcard scans, deep pagination, sorting non-SORTABLE fields, dumping the full doc.**
 
 ```python
-FT.PROFILE idx:products SEARCH QUERY "@category:{electronics}"
+# Bad: wildcard scan over the whole index
+FT.SEARCH idx:bicycle "*" LIMIT 0 10000
+
+# Bad: deep offset pagination — server scans+sorts offset+page rows
+FT.SEARCH idx:bicycle "*" LIMIT 100000 20
+
+# Bad: SORTBY on a non-SORTABLE TEXT field at high LIMIT
+FT.SEARCH idx:bicycle "*" SORTBY description ASC LIMIT 0 1000
+
+# Bad: returning every field when only 3 are used downstream
+FT.AGGREGATE idx:bicycle "*" LOAD *
 ```
 
-- Add `SORTABLE` to fields used in `SORTBY`
+**Client mirrors:**
 
-- Use `TAG SORTABLE UNF` for best performance on tag fields
+```java
+// Jedis — STEP_START query_perf
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.Query;
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    Query q = new Query("@type:{mountain} @price:[100 500]")
+        .setSortBy("price", true)
+        .returnFields("model", "brand", "price")
+        .limit(0, 20)
+        .dialect(2);
+    jedis.ftSearch("idx:bicycle", q);
+}
+// STEP_END
+```
 
-- Use `NOSTEM` if you don't need stemming
+**Client mirrors — read exactly one:**
 
-- Profile queries with `FT.PROFILE`
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
 
-Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/query/](https://redis.io/docs/latest/develop/interact/search-and-query/query/)
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+Upstream sources:
+
+- redis-py: [`doctests/search_quickstart.py`](https://github.com/redis/redis-py/blob/master/doctests/search_quickstart.py)
+
+- Jedis: [`SearchQuickstartExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/SearchQuickstartExample.java)
+
+Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/query/](https://redis.io/docs/latest/develop/interact/search-and-query/query/), [https://redis.io/docs/latest/commands/ft.profile/](https://redis.io/docs/latest/commands/ft.profile/)
 
 ---
 
@@ -1380,231 +2607,445 @@ Vector indexes, HNSW vs FLAT, hybrid search, and RAG patterns with RedisVL.
 
 ### 6.1 Choose HNSW vs FLAT Based on Requirements
 
-**Impact: HIGH (HNSW trades accuracy for speed, FLAT provides exact results)**
+**Impact: HIGH (HNSW gives ~95%+ recall at sub-millisecond latency; FLAT gives exact results but scales linearly)**
 
-Select the right algorithm based on your accuracy requirements and dataset size.
+`HNSW` (Hierarchical Navigable Small World) is the production default: approximate nearest neighbour with tunable recall, sub-millisecond queries even on millions of vectors. `FLAT` is exact brute-force: 100% recall but linear scan cost — fine for thousands of vectors, not for millions.
 
-| Algorithm | Speed | Accuracy | Memory | Best For |
+| Algorithm | Speed | Accuracy | Memory | Best for |
 |-----------|-------|----------|--------|----------|
-| HNSW | Fast (approximate) | ~95%+ recall tunable | Higher | Large datasets (>10k vectors) |
-| FLAT | Slower (exact) | 100% (exact) | Lower | Small datasets, accuracy-critical |
+| HNSW | Fast (approximate) | ~95%+ recall, tunable | Higher | Large datasets (> 10k vectors) |
+| FLAT | Slow (exact) | 100% (exact) | Lower | Small datasets, accuracy-critical |
 
-**Correct: Use HNSW for large-scale production workloads.**
-
-```python
-from redisvl.schema import IndexSchema
-
-# HNSW - fast approximate search, tunable accuracy
-schema = IndexSchema.from_dict({
-    "index": {"name": "idx:docs", "prefix": "doc:"},
-    "fields": [
-        {"name": "embedding", "type": "vector", "attrs": {
-            "dims": 1536,
-            "algorithm": "HNSW",
-            "distance_metric": "COSINE",
-            "M": 16,                  # Higher = more accurate, more memory
-            "EF_CONSTRUCTION": 200    # Higher = better index quality, slower build
-        }}
-    ]
-})
-```
-
-**Correct: Use FLAT when exact results are required.**
+**Correct: HNSW** — use for large-scale production workloads.**
 
 ```python
-# FLAT - exact brute-force search, guaranteed accuracy
-schema = IndexSchema.from_dict({
-    "index": {"name": "idx:small", "prefix": "small:"},
-    "fields": [
-        {"name": "embedding", "type": "vector", "attrs": {
-            "dims": 1536,
-            "algorithm": "FLAT",
-            "distance_metric": "COSINE"
-        }}
-    ]
-})
-```
-
-**Tuning HNSW accuracy vs speed:**
-
-- `M`: Connections per node (16-64). Higher = better recall, more memory
-
-- `EF_CONSTRUCTION`: Build-time parameter (100-500). Higher = better graph quality
-
-- `EF_RUNTIME`: Query-time parameter. Higher = better recall, slower queries
-
-Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/)
-
-### 6.2 Configure Vector Indexes Properly
-
-**Impact: HIGH (Correct configuration is essential for vector search accuracy)**
-
-Set the correct dimensions, algorithm, and distance metric for your embeddings. Vector indexes can be created via CLI, Redis Insight, or any client library.
-
-**Correct: Create index via Redis CLI or Insight.**
-
-```python
-FT.CREATE idx:docs ON HASH PREFIX 1 doc:
+# HNSW with tunable M and EF_CONSTRUCTION
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
     SCHEMA
-        content TEXT
-        embedding VECTOR HNSW 6
+        description_embeddings VECTOR HNSW 10
+            TYPE FLOAT32
+            DIM 1536
+            DISTANCE_METRIC COSINE
+            M 16
+            EF_CONSTRUCTION 200
+```
+
+**Correct: FLAT** — use when exact results are required and the dataset is small.**
+
+```python
+# FLAT — exact brute-force search, guaranteed accuracy
+FT.CREATE idx:bicycle_small ON HASH PREFIX 1 bicycle_small:
+    SCHEMA
+        description_embeddings VECTOR FLAT 6
             TYPE FLOAT32
             DIM 1536
             DISTANCE_METRIC COSINE
 ```
 
-**Correct: Create index via Python (redis-py).**
+**Tuning HNSW recall vs latency:**
+
+- `M` (default 16) — graph connections per node. Higher = better recall, more memory. Practical range 8–64.
+
+- `EF_CONSTRUCTION` (default 200) — build-time exploration depth. Higher = better graph quality, slower index build.
+
+- `EF_RUNTIME` — per-query exploration depth. Set on the query itself (`...=>[KNN 10 @vec $vec EF_RUNTIME 200 AS score]`), not at index time. Higher = better recall, slower query.
+
+**When to use FLAT:**
+
+- Dataset under ~10k vectors and won't grow much.
+
+- Recall must be exactly 100% (e.g., regulatory or evaluation/baseline use cases).
+
+- You need predictable, deterministic results regardless of insert order.
+
+**When NOT needed: use HNSW**
+
+- Production semantic search, RAG retrieval, recommendation.
+
+- Datasets above ~10k vectors where linear scan becomes expensive.
+
+- Any case where 95%+ recall is acceptable.
+
+**Incorrect: FLAT on a million-vector index, or under-tuning HNSW and then blaming recall.**
 
 ```python
-from redis import Redis
-from redis.commands.search.field import TextField, VectorField
+# Bad: FLAT on 1M vectors — every query becomes a 1M-vector linear scan
+FT.CREATE idx:big_vectors ON HASH PREFIX 1 doc:
+    SCHEMA embedding VECTOR FLAT 6 TYPE FLOAT32 DIM 1536 DISTANCE_METRIC COSINE
 
-r = Redis()
-
-# Define schema with vector field
-schema = [
-    TextField("content"),
-    VectorField(
-        "embedding",
-        algorithm="HNSW",
-        attributes={
-            "TYPE": "FLOAT32",
-            "DIM": 1536,  # Must match your embedding model
-            "DISTANCE_METRIC": "COSINE"
-        }
-    )
-]
-
-r.ft("idx:docs").create_index(schema, definition=IndexDefinition(prefix=["doc:"]))
+# Bad: HNSW with default M=16 and EF_CONSTRUCTION=200 on a recall-critical workload —
+# then logging poor recall instead of raising EF_RUNTIME at query time.
 ```
 
-**Correct: Create index via RedisVL.**
+**Client mirrors:**
 
-```python
-from redisvl.index import SearchIndex
-from redisvl.schema import IndexSchema
-
-schema = IndexSchema.from_dict({
-    "index": {"name": "idx:docs", "prefix": "doc:"},
-    "fields": [
-        {"name": "content", "type": "text"},
-        {"name": "embedding", "type": "vector", "attrs": {
-            "dims": 1536,
-            "algorithm": "HNSW",
-            "distance_metric": "COSINE"
-        }}
-    ]
-})
-
-index = SearchIndex(schema)
-index.create(overwrite=True)
+```java
+// Jedis — STEP_START vector_algorithm
+import redis.clients.jedis.search.schemafields.VectorField;
+import java.util.Map;
+VectorField hnsw = VectorField.builder()
+    .fieldName("description_embeddings")
+    .algorithm(VectorField.VectorAlgorithm.HNSW)
+    .attributes(Map.of("TYPE", "FLOAT32", "DIM", 1536,
+                       "DISTANCE_METRIC", "COSINE",
+                       "M", 16, "EF_CONSTRUCTION", 200))
+    .build();
+VectorField flat = VectorField.builder()
+    .fieldName("description_embeddings")
+    .algorithm(VectorField.VectorAlgorithm.FLAT)
+    .attributes(Map.of("TYPE", "FLOAT32", "DIM", 1536, "DISTANCE_METRIC", "COSINE"))
+    .build();
+// STEP_END
 ```
 
-**Incorrect: Mismatched dimensions or wrong distance metric.**
+**Client mirrors — read exactly one:**
 
-```python
-# Bad: Wrong dimensions for your model
-{"dims": 768}  # But using OpenAI which outputs 1536
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
 
-# Bad: Wrong metric for normalized embeddings
-{"distance_metric": "L2"}  # When embeddings are normalized for COSINE
-```
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+**RedisVL coverage: schema-dict examples for HNSW and FLAT live in `references/clients/python-redisvl.md` (forthcoming, spec 0004). Inline RedisVL is intentionally omitted here.**
 
 Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/)
 
-### 6.3 Implement RAG Pattern Correctly
+### 6.2 Combine Lexical and Vector Search Correctly
 
-**Impact: HIGH (Proper RAG implementation improves LLM response quality)**
+**Impact: MEDIUM (Pre-filter + KNN works on every Redis 8.x; FT.HYBRID adds explicit rank fusion on Redis ≥ 8.4.0)**
 
-Store documents with embeddings, retrieve relevant context, and pass to LLM.
+Two patterns address two different needs:
 
-**Correct: Full RAG pipeline with RedisVL.**
+- **Filter-narrowed vector search** (works on every Redis with vector support): write a normal `FT.SEARCH` with a TAG/NUMERIC pre-filter on the left side of the `=>[KNN ...]` clause. The pre-filter shrinks the candidate set; KNN then runs only over survivors.
 
-```python
-from redisvl.index import SearchIndex
-from redisvl.query import VectorQuery
+- **Blended lexical + vector ranking with explicit fusion** (Redis ≥ 8.4.0): use `FT.HYBRID`, which runs a `SEARCH` leg and a `VSIM` leg in parallel and fuses their rankings via Reciprocal Rank Fusion (`COMBINE RRF`) or a weighted score blend (`COMBINE LINEAR`).
 
-# 1. Store documents with embeddings
-for doc in documents:
-    embedding = embed_model.encode(doc["content"])
-    index.load([{
-        "content": doc["content"],
-        "embedding": embedding.tolist(),
-        "source": doc["source"]
-    }])
-
-# 2. Query with vector similarity
-query_embedding = embed_model.encode(user_question)
-results = index.search(VectorQuery(
-    vector=query_embedding,
-    vector_field_name="embedding",
-    return_fields=["content", "source"],
-    num_results=5
-))
-
-# 3. Pass context to LLM
-context = "\n".join([r["content"] for r in results])
-response = llm.generate(f"Context: {context}\n\nQuestion: {user_question}")
-```
-
-**Best practices:**
-
-- Normalize vectors if using COSINE distance
-
-- Batch inserts using `index.load()` with lists
-
-- Set appropriate M and EF_CONSTRUCTION for HNSW based on dataset size
-
-- Use filters to reduce the search space before vector comparison
-
-- Consider chunking long documents for better retrieval
-
-Reference: [https://redis.io/docs/latest/develop/get-started/rag/](https://redis.io/docs/latest/develop/get-started/rag/)
-
-### 6.4 Use Hybrid Search for Better Results
-
-**Impact: MEDIUM (Combining vector + filters improves relevance and reduces search space)**
-
-Combine vector similarity with attribute filtering for more relevant results.
-
-**Correct: Apply filters to reduce search space.**
+**Correct: pre-filtered KNN** (works on all Redis 8.x and the RediSearch module).**
 
 ```python
-from redisvl.query import VectorQuery
-
-query = VectorQuery(
-    vector=query_embedding,
-    vector_field_name="embedding",
-    return_fields=["content", "category", "date"],
-    num_results=10,
-    filter_expression="@category:{technology} @date:[2024 2025]"
-)
-
-results = index.search(query)
+# Filter to mountain bikes under $500, then KNN over the survivors
+FT.SEARCH idx:bicycle "(@type:{mountain} @price:[100 500])=>[KNN 10 @description_embeddings $vec AS score]"
+    SORTBY score
+    PARAMS 2 vec "<vector_blob>"
+    RETURN 4 model brand price score
+    DIALECT 2
 ```
 
-**Incorrect: Searching entire vector space when filters apply.**
+**Correct: FT.HYBRID** — requires Redis ≥ 8.4.0.**
 
 ```python
-# Bad: No filter - searches all vectors then filters client-side
-results = index.search(VectorQuery(
-    vector=query_embedding,
-    vector_field_name="embedding",
-    num_results=1000
-))
-# Client-side filtering - wasteful
-filtered = [r for r in results if r["category"] == "technology"]
+# Blend lexical ("mountain bicycle") + vector similarity with RRF fusion
+FT.HYBRID idx:bicycle
+    SEARCH "mountain bicycle"
+    VSIM @description_embeddings $vec
+    KNN 2 K 10
+    COMBINE RRF 10                         # RRF <count> — number of fused results to keep
+    PARAMS 2 vec "<vector_blob>"
+    LIMIT 0 10
+    DIALECT 2
+
+# Weighted (LINEAR) — α weights the SEARCH score, β the VSIM score
+FT.HYBRID idx:bicycle
+    SEARCH "mountain bicycle" YIELD_SCORE_AS lex_score
+    VSIM @description_embeddings $vec YIELD_SCORE_AS vec_score
+    KNN 2 K 20
+    COMBINE LINEAR 4 ALPHA 0.4 BETA 0.6
+    PARAMS 2 vec "<vector_blob>"
+    DIALECT 2
 ```
 
-**Tips:**
+**When to use which:**
 
-- Use TAG fields for category filters
+| Goal | Use |
+|------|-----|
+| "Find vectors near $vec, but only within category X and price < $500." | Pre-filtered KNN inside `FT.SEARCH` (works everywhere). |
+| "Rank documents by a blend of lexical relevance and semantic similarity." | `FT.HYBRID` (Redis ≥ 8.4.0). |
+| "Same goal but on Redis < 8.4.0." | Run two separate queries client-side and fuse the rankings yourself (rough fallback; loses cross-leg score calibration). |
 
-- Use NUMERIC fields for date/price ranges
+**Incorrect: Running an unfiltered KNN and then filtering client-side, or assuming `FT.HYBRID` exists on older Redis.**
 
-- Filters are applied before vector search, reducing computation
+```python
+# Bad (client mirror): same anti-pattern in Python — fetch 1000, filter in memory.
+results = r.ft("idx:bicycle").search(
+    Query("*=>[KNN 1000 @description_embeddings $vec AS score]")
+    .sort_by("score").dialect(2),
+    query_params={"vec": vec_blob})
+mountain = [r for r in results.docs if r.type == "mountain" and 100 <= int(r.price) <= 500]
+```
 
-Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/query/combined/](https://redis.io/docs/latest/develop/interact/search-and-query/query/combined/)
+**Performance notes:**
+
+- Pre-filter with `TAG` and `NUMERIC` fields — these are cheap and dramatically cut the KNN candidate set.
+
+- For `FT.HYBRID`, the `KNN <count> K <k>` clause inside `VSIM` controls how many vector neighbours feed the fusion stage; the outer `LIMIT` controls how many results you return.
+
+- `COMBINE RRF` needs no tuning; `COMBINE LINEAR` needs calibrated α/β — start at 0.5/0.5 and adjust based on relevance evals.
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START hybrid_search
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.Query;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    Query q = new Query(
+        "(@type:{mountain} @price:[100 500])=>[KNN 10 @description_embeddings $vec AS score]")
+        .setSortBy("score", true)
+        .returnFields("model", "brand", "price", "score")
+        .addParam("vec", vecBlob)
+        .dialect(2)
+        .limit(0, 10);
+    jedis.ftSearch("idx:bicycle", q);
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+**RedisVL coverage: `VectorQuery` with filter expressions and the `HybridQuery` wrapper for FT.HYBRID live in `references/clients/python-redisvl.md` (forthcoming, spec 0004).**
+
+Upstream sources:
+
+- redis-py: [`doctests/query_combined.py`](https://github.com/redis/redis-py/blob/master/doctests/query_combined.py)
+
+- Jedis: [`VectorSearchExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/VectorSearchExample.java)
+
+Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/query/combined/](https://redis.io/docs/latest/develop/interact/search-and-query/query/combined/), [https://redis.io/docs/latest/commands/ft.hybrid/](https://redis.io/docs/latest/commands/ft.hybrid/)
+
+### 6.3 Configure Vector Indexes Properly
+
+**Impact: HIGH (Correct dimensions, algorithm, and distance metric are required for vector search to work at all)**
+
+A vector field needs three things stated correctly at index time: `TYPE` (almost always `FLOAT32`), `DIM` (must equal your embedding model's output size), and `DISTANCE_METRIC` (`COSINE`, `L2`, or `IP`). Mismatching any of these silently produces wrong results or refuses inserts — there is no runtime warning.
+
+For the algorithm choice (HNSW vs FLAT), see `vector-algorithm-choice.md`.
+
+**Correct: Canonical CLI form against the Bicycle dataset — 1536-dim OpenAI-style embeddings on a HASH index.**
+
+```python
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
+    SCHEMA
+        model         TEXT WEIGHT 2.0
+        brand         TAG
+        description   TEXT
+        condition     TAG
+        price         NUMERIC SORTABLE
+        description_embeddings VECTOR HNSW 6
+            TYPE FLOAT32
+            DIM 1536
+            DISTANCE_METRIC COSINE
+```
+
+**For JSON documents** the vector field is a JSONPath plus `AS alias` (see `search-json-indexing.md`):**
+
+```python
+FT.CREATE idx:bicycle ON JSON PREFIX 1 bicycle:
+    SCHEMA
+        $.description_embeddings AS description_embeddings VECTOR HNSW 6
+            TYPE FLOAT32
+            DIM 1536
+            DISTANCE_METRIC COSINE
+```
+
+**Required attributes:**
+
+| Attribute | Values | Notes |
+|-----------|--------|-------|
+| `TYPE` | `FLOAT32`, `FLOAT64`, `BFLOAT16`, `FLOAT16` | `FLOAT32` is the standard. Lower-precision types save memory on very large indexes. |
+| `DIM` | integer | Must match the embedding model exactly — 1536 for OpenAI `text-embedding-3-small` / `ada-002`, 3072 for `text-embedding-3-large`, 768 for many open-source models. |
+| `DISTANCE_METRIC` | `COSINE`, `L2`, `IP` | Match the metric your embedding model was trained for. Normalized embeddings work with all three but COSINE is the typical choice. |
+
+**Incorrect: Dim mismatch, wrong metric for normalized embeddings, or inlining the vector blob at query time (use PARAMS — see `search-vector-query.md`).**
+
+```python
+# Bad: DIM mismatch — inserts silently truncated/padded, queries return junk
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
+    SCHEMA description_embeddings VECTOR HNSW 6 TYPE FLOAT32 DIM 768 DISTANCE_METRIC COSINE
+# ... but the embeddings inserted are 1536 floats
+
+# Bad: L2 on normalized embeddings — works but obscures interpretability (use COSINE)
+```
+
+**Verifying the index after creation:**
+
+```python
+FT.INFO idx:bicycle
+# Look for "attributes" — confirm vector field shows correct DIM/TYPE/DISTANCE_METRIC
+```
+
+**Client mirrors:**
+
+```java
+// Jedis — STEP_START vector_index_create
+// Mirrors VectorSearchExample.java
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.FTCreateParams;
+import redis.clients.jedis.search.IndexDataType;
+import redis.clients.jedis.search.schemafields.*;
+import java.util.Map;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    jedis.ftCreate("idx:bicycle",
+        FTCreateParams.createParams().on(IndexDataType.HASH).prefix("bicycle:"),
+        TextField.of("model").weight(2.0),
+        TagField.of("brand"),
+        NumericField.of("price").sortable(),
+        VectorField.builder()
+            .fieldName("description_embeddings")
+            .algorithm(VectorField.VectorAlgorithm.HNSW)
+            .attributes(Map.of("TYPE", "FLOAT32", "DIM", 1536, "DISTANCE_METRIC", "COSINE"))
+            .build());
+}
+// STEP_END
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+**RedisVL coverage: higher-level schema-from-dict and `SearchIndex` usage are covered in `references/clients/python-redisvl.md` (forthcoming, spec 0004). RedisVL examples are intentionally omitted from this rule — read the RedisVL reference when targeting that SDK.**
+
+Upstream sources:
+
+- redis-py: [`doctests/search_vss.py`](https://github.com/redis/redis-py/blob/master/doctests/search_vss.py)
+
+- Jedis: [`VectorSearchExample.java`](https://github.com/redis/jedis/blob/master/src/test/java/io/redis/examples/VectorSearchExample.java)
+
+Reference: [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/)
+
+### 6.4 Implement RAG Retrieval Against Redis Correctly
+
+**Impact: HIGH (Proper retrieval shape (pre-filter, score alias, RETURN) directly determines LLM answer quality)**
+
+A RAG pipeline against Redis is three steps: (1) store documents + embeddings in a HASH or JSON index, (2) embed the user's question with the same model, (3) run a KNN query that returns the top-k passages and their distance. Step 3 is where most quality bugs live — see `search-vector-query.md` for the canonical query form.
+
+**Correct: minimal end-to-end pipeline.** The retrieval step is CLI-form first; the embedding/LLM steps are deliberately client-side.**
+
+```python
+# 1. Index, built once
+FT.CREATE idx:bicycle ON HASH PREFIX 1 bicycle:
+    SCHEMA
+        description TEXT
+        type TAG
+        price NUMERIC SORTABLE
+        description_embeddings VECTOR HNSW 6 TYPE FLOAT32 DIM 1536 DISTANCE_METRIC COSINE
+
+# 2. Documents inserted with HSET (or JSON.SET for JSON indexes).
+#    The vector field holds the raw FLOAT32 little-endian blob.
+
+# 3. Retrieval — pre-filtered KNN, score aliased, only the fields the LLM needs returned
+FT.SEARCH idx:bicycle "(@type:{mountain})=>[KNN 5 @description_embeddings $query_vec AS score]"
+    SORTBY score
+    PARAMS 2 query_vec "<query_vector_blob>"
+    RETURN 3 description type score
+    DIALECT 2
+```
+
+**End-to-end pattern (redis-py):**
+
+```python
+# redis-py — STEP_START rag_pipeline
+# Distilled from doctests/search_vss.py
+import numpy as np
+from redis import Redis
+from redis.commands.search.query import Query
+
+r = Redis()
+
+def embed(text: str) -> bytes:
+    # Replace with your model — must produce the SAME dim as the index (1536 here)
+    return np.array(embed_model.encode(text), dtype=np.float32).tobytes()
+
+def retrieve(question: str, k: int = 5, type_filter: str = "mountain"):
+    q = (Query(f"(@type:{{{type_filter}}})=>[KNN {k} @description_embeddings $vec AS score]")
+         .sort_by("score").return_fields("description", "type", "score")
+         .dialect(2).paging(0, k))
+    return r.ft("idx:bicycle").search(q, query_params={"vec": embed(question)})
+
+passages = retrieve("lightweight mountain bicycle for trails")
+context = "\n\n".join(d.description for d in passages.docs)
+# Pass `context` + question to your LLM of choice.
+# STEP_END
+```
+
+**End-to-end pattern (Jedis):**
+
+```java
+// Jedis — STEP_START rag_pipeline
+import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.search.Query;
+
+try (UnifiedJedis jedis = new UnifiedJedis("redis://localhost:6379")) {
+    byte[] vec = embed("lightweight mountain bicycle for trails"); // FLOAT32 little-endian
+    Query q = new Query("(@type:{mountain})=>[KNN 5 @description_embeddings $vec AS score]")
+        .setSortBy("score", true)
+        .returnFields("description", "type", "score")
+        .addParam("vec", vec)
+        .dialect(2)
+        .limit(0, 5);
+    var result = jedis.ftSearch("idx:bicycle", q);
+    // Build the prompt from result.getDocuments() and call your LLM.
+}
+// STEP_END
+```
+
+**Retrieval-quality checklist:**
+
+- Normalize embeddings if the model isn't already producing unit vectors and you use `COSINE`.
+
+- Use a pre-filter (TAG/NUMERIC) before `=>[KNN ...]` when the user supplies categorical or range constraints — see `search-vector-query.md`.
+
+- Return only the fields the LLM consumes (the score alias + the passage text). Returning the embedding wastes bandwidth.
+
+- Chunk long documents to a size near the embedding model's effective context (e.g., 200–500 tokens) before indexing — retrieval quality drops sharply on chunks too large for the embedding model.
+
+- Re-embedding the corpus after a model change is mandatory — you cannot mix embeddings from different models in the same index.
+
+**Incorrect: Returning everything and filtering client-side, mismatched embedding models, or skipping the pre-filter.**
+
+```python
+# Bad: client-side filter wastes vector work
+results = r.ft("idx:bicycle").search(
+    Query("*=>[KNN 1000 @description_embeddings $vec AS score]")
+    .sort_by("score").dialect(2),
+    query_params={"vec": vec_blob})
+mountain = [d for d in results.docs if d.type == "mountain"][:5]
+
+# Bad: question embedded with model A, corpus embedded with model B — distances meaningless
+```
+
+**Client mirrors — read exactly one:**
+
+- For raw redis-py targets, read `references/clients/python-redis-py.md`.
+
+- For Jedis (Java) targets, read `references/clients/java-jedis.md`.
+
+- For RedisVL targets, read `references/clients/python-redisvl.md`.
+
+- Do not read more than one client reference.
+
+**RedisVL coverage: `SearchIndex.load()` for bulk doc + embedding insertion and `VectorQuery` end-to-end pipelines live in `references/clients/python-redisvl.md` (forthcoming, spec 0004). RedisVL pipeline examples are intentionally omitted here.**
+
+Cross-links: `search-vector-query.md` (KNN syntax in depth), `vector-index-creation.md`, `vector-hybrid-search.md`.
+
+Reference: [https://redis.io/docs/latest/develop/get-started/rag/](https://redis.io/docs/latest/develop/get-started/rag/), [https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/](https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/)
 
 ---
 
@@ -2189,7 +3630,7 @@ MEMORY USAGE mykey
 CLIENT LIST
 CLIENT INFO
 
-# Index info (RQE)
+# Index info (Search)
 FT.INFO idx:products
 FT.PROFILE idx:products SEARCH QUERY "@name:laptop"
 ```
