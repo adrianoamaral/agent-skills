@@ -13,7 +13,7 @@ Reference docs are loaded **on demand**, not bundled into rules. Rules link in b
 | If your task is... | Read this reference |
 |--------------------|---------------------|
 | Writing any `FT.SEARCH` / `FT.AGGREGATE` / `FT.HYBRID` query expression | [`search-syntax-primitives.md`](./search-syntax-primitives.md) |
-| Generating Python (raw `redis-py`) code | [`clients/python-redis-py.md`](./clients/python-redis-py.md) *(forthcoming — spec 0002)* |
+| Generating Python (raw `redis-py`) code | [`clients/python-redis-py.md`](./clients/python-redis-py.md) |
 | Generating Java (`Jedis`) code | [`clients/java-jedis.md`](./clients/java-jedis.md) *(forthcoming — spec 0003)* |
 | Generating Python code that uses the `redisvl` SDK | [`clients/python-redisvl.md`](./clients/python-redisvl.md) *(forthcoming — spec 0004)* |
 | Unsure which client | Stay with the canonical CLI form inside the rule itself; no client reference is needed. |
@@ -41,7 +41,7 @@ The validator (`packages/redis-development-build/src/validate.ts`) requires this
 | File | Status | Spec |
 |------|--------|------|
 | `search-syntax-primitives.md` | Available now | [`0001`](../../../spec/0001-search-syntax-coverage.md) |
-| `clients/python-redis-py.md` | Forthcoming | [`0002`](../../../spec/0002-redis-py-client-reference.md) |
+| `clients/python-redis-py.md` | Available now | [`0002`](../../../spec/0002-redis-py-client-reference.md) |
 | `clients/java-jedis.md` | Forthcoming | [`0003`](../../../spec/0003-jedis-client-reference.md) |
 | `clients/python-redisvl.md` | Forthcoming | [`0004`](../../../spec/0004-redisvl-client-reference.md) |
 
